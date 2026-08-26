@@ -1,0 +1,271 @@
+/**
+ * Rain of Fire — all tunable game data lives here.
+ * Distances are in "metres" which map 1:1 to world units.
+ */
+
+export const WORLD = {
+  /** Total battlefield width in world units. */
+  width: 3400,
+  /** Y of the ground line, measured from the top of the world. */
+  groundY: 620,
+  height: 700,
+  /** Player city occupies [cityRight.x0, cityRight.x1]. */
+  cityRight: { x0: 2320, x1: 3280 },
+  cityLeft: { x0: 120, x1: 1080 },
+};
+
+export const MATCH = {
+  /** Seconds of peace at the start of a match — nobody may fire. */
+  peaceSeconds: 120,
+  /**
+   * Every N seconds every building limit goes up by one. Short matches scale
+   * this down so a 5-minute game still reaches a couple of steps.
+   */
+  limitStepSeconds: 420, // 7 minutes, at the default 15-minute length
+  limitStepFor: (durationSeconds: number): number =>
+    durationSeconds >= 900 ? 420 : Math.round(durationSeconds / 4),
+  /** Max +N added to every building cap over a match. */
+  maxLimitSteps: 4,
+  /** Income tick length in seconds. */
+  incomeIntervalSeconds: 2,
+  startingMoney: 50,
+  /** Default match length in seconds; overridable from the main menu. */
+  durationSeconds: 900, // 15 minutes
+  /** A player with no buildings and no money to build for this long loses. */
+  wipeoutGraceSeconds: 12,
+};
+
+// ---------------------------------------------------------------------------
+// Buildings
+// ---------------------------------------------------------------------------
+
+export interface BuildingDef {
+  id: number;
+  name: string;
+  cost: number;
+  /** Money produced every income tick (2s). */
+  income: number;
+  hp: number;
+  /** Base cap; raised by MATCH.limitStepSeconds. */
+  baseLimit: number;
+  /** Drawing footprint. */
+  w: number;
+  h: number;
+  /** Rows of windows drawn on the facade. */
+  windowRows: number;
+  windowCols: number;
+  /** Roof silhouette style. */
+  roof: 'flat' | 'step' | 'spire' | 'antenna' | 'slant';
+}
+
+export const BUILDINGS: BuildingDef[] = [
+  { id: 0, name: 'Shop Row',    cost: 2,  income: 0.2, hp: 15,  baseLimit: 6, w: 46, h: 34,  windowRows: 2, windowCols: 4, roof: 'flat' },
+  { id: 1, name: 'Apartments',  cost: 4,  income: 0.45, hp: 30,  baseLimit: 6, w: 44, h: 54,  windowRows: 4, windowCols: 4, roof: 'flat' },
+  { id: 2, name: 'Office Block',cost: 6,  income: 0.7, hp: 45,  baseLimit: 5, w: 42, h: 76,  windowRows: 6, windowCols: 4, roof: 'step' },
+  { id: 3, name: 'Tower',       cost: 10, income: 1.2, hp: 60,  baseLimit: 5, w: 38, h: 104, windowRows: 8, windowCols: 3, roof: 'flat' },
+  { id: 4, name: 'High Rise',   cost: 16, income: 2.0, hp: 90,  baseLimit: 4, w: 40, h: 136, windowRows: 10, windowCols: 3, roof: 'step' },
+  { id: 5, name: 'Plaza Tower', cost: 24, income: 3.1, hp: 135, baseLimit: 4, w: 44, h: 172, windowRows: 12, windowCols: 3, roof: 'slant' },
+  { id: 6, name: 'Skytower',    cost: 34, income: 4.5, hp: 240, baseLimit: 3, w: 46, h: 214, windowRows: 14, windowCols: 3, roof: 'antenna' },
+  { id: 7, name: 'Landmark',    cost: 46, income: 6.2, hp: 360, baseLimit: 3, w: 44, h: 262, windowRows: 17, windowCols: 3, roof: 'spire' },
+  { id: 8, name: 'Megatower',   cost: 60, income: 8.2, hp: 600, baseLimit: 3, w: 42, h: 320, windowRows: 21, windowCols: 3, roof: 'spire' },
+];
+
+// ---------------------------------------------------------------------------
+// Attack missiles (ICBM)
+// ---------------------------------------------------------------------------
+
+export interface MissileDef {
+  tier: number; // 1..6
+  name: string;
+  roman: string;
+  /** Cost to queue one shot. */
+  cost: number;
+  /** Base reload in seconds between shots of this tier. */
+  reload: number;
+  /** World units per second along the flight arc. */
+  speed: number;
+  damage: number;
+  /** Blast radius; buildings inside take falloff damage. */
+  blast: number;
+  /** Cost in dollars to unlock during a match. 0 = unlocked from the start. */
+  unlockCost: number;
+  /** In-match purchase that shaves reload; cost grows each time. */
+  reloadUpgradeCost: number;
+  reloadStep: number;
+  /** Cannot be intercepted by any anti-air. */
+  unstoppable?: boolean;
+  /** Hard cap of shots per match (0 = unlimited). */
+  perMatchLimit: number;
+  color: string;
+  length: number;
+}
+
+export const MISSILES: MissileDef[] = [
+  { tier: 1, name: 'Scud',      roman: 'I',   cost: 1.5, reload: 5.0, speed: 300, damage: 15,   blast: 26, unlockCost: 0,   reloadUpgradeCost: 5,   reloadStep: 0.1, perMatchLimit: 0, color: '#c8d2dc', length: 15 },
+  { tier: 2, name: 'Tochka',    roman: 'II',  cost: 4,   reload: 5.0, speed: 375, damage: 45,   blast: 34, unlockCost: 10,  reloadUpgradeCost: 10,  reloadStep: 0.1, perMatchLimit: 0, color: '#a9c6a2', length: 18 },
+  { tier: 3, name: 'Iskander',  roman: 'III', cost: 8,   reload: 5.0, speed: 465, damage: 120,  blast: 44, unlockCost: 30,  reloadUpgradeCost: 22,  reloadStep: 0.1, perMatchLimit: 0, color: '#8fa8bf', length: 22 },
+  { tier: 4, name: 'Topol',     roman: 'IV',  cost: 15,  reload: 5.0, speed: 575, damage: 300,  blast: 58, unlockCost: 80,  reloadUpgradeCost: 40,  reloadStep: 0.1, perMatchLimit: 0, color: '#d8d8d8', length: 26 },
+  { tier: 5, name: 'Satan II',  roman: 'V',   cost: 30,  reload: 5.0, speed: 750, damage: 700,  blast: 76, unlockCost: 120, reloadUpgradeCost: 65,  reloadStep: 0.1, perMatchLimit: 0, color: '#3f4750', length: 30 },
+  { tier: 6, name: 'Artillery', roman: 'VI',  cost: 60,  reload: 3.0, speed: 510, damage: 1500, blast: 120, unlockCost: 200, reloadUpgradeCost: 90, reloadStep: 0.1, unstoppable: true, perMatchLimit: 1, color: '#6d6a4f', length: 34 },
+];
+
+// ---------------------------------------------------------------------------
+// Anti-air systems — index 0 is the radar, 1..5 intercept missile tiers 1..5
+// ---------------------------------------------------------------------------
+
+export interface AaDef {
+  id: number;
+  name: string;
+  roman: string;
+  /** Missile tier this system can intercept. 0 = radar, intercepts nothing. */
+  interceptsTier: number;
+  /** Cost of the 1st and 2nd unit. */
+  costs: [number, number];
+  baseRadius: number;
+  /** Seconds between interceptor launches from one battery. */
+  baseReload: number;
+  /** In-match radius upgrade. */
+  radiusUpgradeCost: number;
+  radiusStep: number;
+  /** In-match reload upgrade (radar has none). */
+  reloadUpgradeCost: number;
+  reloadStep: number;
+  /** Cost of one interceptor round for this battery. */
+  ammoCost: number;
+  ammoCap: number;
+  /** Unique ring / tracer colour (requirement 6). */
+  color: string;
+}
+
+export const AA: AaDef[] = [
+  { id: 0, name: 'Radar',   roman: '',    interceptsTier: 0, costs: [0, 30],  baseRadius: 260, baseReload: 0,   radiusUpgradeCost: 11, radiusStep: 10, reloadUpgradeCost: 0,  reloadStep: 0,    ammoCost: 0,  ammoCap: 0,  color: '#7de3ff' },
+  { id: 1, name: 'Avenger', roman: 'I',   interceptsTier: 1, costs: [0, 18],  baseRadius: 175, baseReload: 5.0, radiusUpgradeCost: 14, radiusStep: 5,  reloadUpgradeCost: 4,  reloadStep: 0.05, ammoCost: 2,  ammoCap: 40, color: '#ffd23f' },
+  { id: 2, name: 'Hawk',    roman: 'II',  interceptsTier: 2, costs: [25, 40], baseRadius: 190, baseReload: 5.0, radiusUpgradeCost: 12, radiusStep: 5,  reloadUpgradeCost: 6,  reloadStep: 0.05, ammoCost: 4,  ammoCap: 40, color: '#59e07a' },
+  { id: 3, name: 'Patriot', roman: 'III', interceptsTier: 3, costs: [35, 55], baseRadius: 210, baseReload: 5.0, radiusUpgradeCost: 17, radiusStep: 5,  reloadUpgradeCost: 8,  reloadStep: 0.05, ammoCost: 7,  ammoCap: 40, color: '#ff8b3d' },
+  { id: 4, name: 'S-400',   roman: 'IV',  interceptsTier: 4, costs: [50, 80], baseRadius: 235, baseReload: 5.0, radiusUpgradeCost: 22, radiusStep: 5,  reloadUpgradeCost: 14, reloadStep: 0.05, ammoCost: 13, ammoCap: 40, color: '#c46bff' },
+  { id: 5, name: 'THAAD',   roman: 'V',   interceptsTier: 5, costs: [70, 110],baseRadius: 260, baseReload: 5.0, radiusUpgradeCost: 26, radiusStep: 5,  reloadUpgradeCost: 18, reloadStep: 0.05, ammoCost: 26, ammoCap: 40, color: '#ff5470' },
+];
+
+export const AA_MAX_PER_TYPE = 2;
+
+/** Interceptor flight speed as a multiple of the incoming missile's speed. */
+export const INTERCEPTOR_SPEED_FACTOR = 1.4;
+export const INTERCEPTOR_MIN_SPEED = 480;
+/**
+ * A battery will not take a shot it can only complete below this height — the
+ * reason missiles aimed at thinly covered parts of a city get through.
+ */
+export const MIN_INTERCEPT_ALTITUDE = 95;
+
+/** Every repeat purchase of an in-match upgrade multiplies its price by this. */
+export const UPGRADE_COST_GROWTH = 1.35;
+/** Repeat purchases of a *building* do not get more expensive (matches the original). */
+
+// ---------------------------------------------------------------------------
+// Meta progression (stars, spent in the main-menu shop)
+// ---------------------------------------------------------------------------
+
+export const META = {
+  /** Stars awarded for a win / a loss. */
+  winStars: 3,
+  lossStars: 1,
+  /** Extra stars for a dominant win, scaled by final city-value share. */
+  dominanceBonus: 3,
+  /** Star shop. */
+  radiusStep: 5, // +5 m per level
+  radiusMaxLevel: 20,
+  radiusCost: (level: number) => 2 + level * 2,
+  missileReloadStep: 0.25, // -0.25 s per level
+  missileReloadMaxLevel: 12,
+  missileReloadCost: (level: number) => 3 + level * 3,
+  aaReloadStep: 0.1, // -0.1 s per level
+  aaReloadMaxLevel: 12,
+  aaReloadCost: (level: number) => 3 + level * 2,
+  /** Reload can never drop below this. */
+  minReload: 0.6,
+};
+
+// ---------------------------------------------------------------------------
+// Bots
+// ---------------------------------------------------------------------------
+
+export type Difficulty = 'easy' | 'medium' | 'hard';
+
+export interface BotProfile {
+  label: string;
+  blurb: string;
+  /** Multiplier on income. */
+  incomeMult: number;
+  /** Seconds between bot decisions. */
+  thinkInterval: number;
+  /** Share of spare cash the bot is willing to sink into defence. */
+  defenceBudget: number;
+  /** Share of spare cash spent on offence once the peace ends. */
+  offenceBudget: number;
+  /** How many missiles it fires per salvo. */
+  salvoMin: number;
+  salvoMax: number;
+  /** Aiming error in world units — lower is deadlier. */
+  aimError: number;
+  /** 0..1 — probability it picks your most valuable building as a target. */
+  smartTargeting: number;
+  /** Highest missile tier it will ever unlock. */
+  maxTier: number;
+  /** Seconds after peace ends before its first salvo. */
+  firstStrikeDelay: number;
+  /** How eagerly it stocks interceptors (rounds it aims to keep per battery). */
+  ammoTarget: number;
+}
+
+export const BOTS: Record<Difficulty, BotProfile> = {
+  easy: {
+    label: 'Easy',
+    blurb: 'Builds slowly, forgets to reload, aims badly.',
+    incomeMult: 0.8,
+    thinkInterval: 3.2,
+    defenceBudget: 0.25,
+    offenceBudget: 0.35,
+    salvoMin: 1,
+    salvoMax: 2,
+    aimError: 130,
+    smartTargeting: 0.1,
+    maxTier: 2,
+    firstStrikeDelay: 45,
+    ammoTarget: 3,
+  },
+  medium: {
+    label: 'Medium',
+    blurb: 'Balanced economy, keeps a real air defence up.',
+    incomeMult: 0.95,
+    thinkInterval: 2.2,
+    defenceBudget: 0.36,
+    offenceBudget: 0.42,
+    salvoMin: 2,
+    salvoMax: 4,
+    aimError: 80,
+    smartTargeting: 0.4,
+    maxTier: 4,
+    firstStrikeDelay: 25,
+    ammoTarget: 6,
+  },
+  hard: {
+    label: 'Hard',
+    blurb: 'Rushes economy, layered defence, hunts your best towers.',
+    incomeMult: 1.3,
+    thinkInterval: 0.9,
+    defenceBudget: 0.42,
+    offenceBudget: 0.7,
+    salvoMin: 4,
+    salvoMax: 9,
+    aimError: 12,
+    smartTargeting: 0.9,
+    maxTier: 6,
+    firstStrikeDelay: 3,
+    ammoTarget: 22,
+  },
+};
+
+export const BOT_NAMES = [
+  'Larry Turner', 'Ivan Petrov', 'Cole Barnes', 'Mira Vasquez', 'Dain Okoro',
+  'Kaya Lindqvist', 'Ruslan Aliyev', 'Nadia Farouk', 'Tomas Reyes', 'Ada Ghali',
+];

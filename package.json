@@ -1,0 +1,18 @@
+{
+  "name": "firerain",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Rain of Fire - a browser clone of the missile-vs-city strategy game",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "sim": "npx esbuild tools/sim.ts --bundle --platform=node --format=esm --outfile=node_modules/.rof-sim.mjs --log-level=warning && node node_modules/.rof-sim.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0",
+    "vite": "^7.1.0"
+  }
+}
