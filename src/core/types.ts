@@ -27,6 +27,10 @@ export interface AaBattery {
   type: number; // index into AA
   side: Side;
   x: number;
+  hp: number;
+  maxHp: number;
+  /** Shake from a recent near miss. */
+  shake: number;
   /** Seconds until this battery can fire again. */
   cooldown: number;
   /** Barrel angle in radians, for the turret animation. */
@@ -137,8 +141,6 @@ export interface SideState {
   launchCooldown: number[];
   /** Shots of each tier already used, for per-match limits. */
   shotsUsed: number[];
-  /** Buildings built per type (destroyed ones still count against the cap). */
-  builtCount: number[];
   /** Pending launches waiting for their tier's launcher to free up. */
   pending: QueuedShot[];
   /** Targets pinned but not yet committed with Fight. */
@@ -151,6 +153,9 @@ export interface SideState {
     intercepted: number;
     hits: number;
     destroyedBuildings: number;
+    destroyedBatteries: number;
+    /** Build value of enemy property this side has flattened. */
+    valueDestroyed: number;
     spent: number;
     earned: number;
   };

@@ -5,13 +5,13 @@
 
 export const WORLD = {
   /** Total battlefield width in world units. */
-  width: 3400,
+  width: 3700,
   /** Y of the ground line, measured from the top of the world. */
   groundY: 620,
   height: 700,
   /** Player city occupies [cityRight.x0, cityRight.x1]. */
-  cityRight: { x0: 2320, x1: 3280 },
-  cityLeft: { x0: 120, x1: 1080 },
+  cityRight: { x0: 2380, x1: 3580 },
+  cityLeft: { x0: 120, x1: 1320 },
 };
 
 export const MATCH = {
@@ -23,7 +23,7 @@ export const MATCH = {
    */
   limitStepSeconds: 420, // 7 minutes, at the default 15-minute length
   limitStepFor: (durationSeconds: number): number =>
-    durationSeconds >= 900 ? 420 : Math.round(durationSeconds / 4),
+    !isFinite(durationSeconds) || durationSeconds >= 900 ? 420 : Math.round(durationSeconds / 4),
   /** Max +N added to every building cap over a match. */
   maxLimitSteps: 4,
   /** Income tick length in seconds. */
@@ -31,8 +31,10 @@ export const MATCH = {
   startingMoney: 50,
   /** Default match length in seconds; overridable from the main menu. */
   durationSeconds: 900, // 15 minutes
-  /** A player with no buildings and no money to build for this long loses. */
-  wipeoutGraceSeconds: 12,
+  /** With no buildings and no money to rebuild for this long, you lose. */
+  wipeoutGraceSeconds: 6,
+  /** Length of one day/night cycle in an unlimited match. */
+  unlimitedCycleSeconds: 480,
 };
 
 // ---------------------------------------------------------------------------
@@ -101,12 +103,12 @@ export interface MissileDef {
 }
 
 export const MISSILES: MissileDef[] = [
-  { tier: 1, name: 'Scud',      roman: 'I',   cost: 1.5, reload: 5.0, speed: 300, damage: 15,   blast: 26, unlockCost: 0,   reloadUpgradeCost: 5,   reloadStep: 0.1, perMatchLimit: 0, color: '#c8d2dc', length: 15 },
-  { tier: 2, name: 'Tochka',    roman: 'II',  cost: 4,   reload: 5.0, speed: 375, damage: 45,   blast: 34, unlockCost: 10,  reloadUpgradeCost: 10,  reloadStep: 0.1, perMatchLimit: 0, color: '#a9c6a2', length: 18 },
-  { tier: 3, name: 'Iskander',  roman: 'III', cost: 8,   reload: 5.0, speed: 465, damage: 120,  blast: 44, unlockCost: 30,  reloadUpgradeCost: 22,  reloadStep: 0.1, perMatchLimit: 0, color: '#8fa8bf', length: 22 },
-  { tier: 4, name: 'Topol',     roman: 'IV',  cost: 15,  reload: 5.0, speed: 575, damage: 300,  blast: 58, unlockCost: 80,  reloadUpgradeCost: 40,  reloadStep: 0.1, perMatchLimit: 0, color: '#d8d8d8', length: 26 },
-  { tier: 5, name: 'Satan II',  roman: 'V',   cost: 30,  reload: 5.0, speed: 750, damage: 700,  blast: 76, unlockCost: 120, reloadUpgradeCost: 65,  reloadStep: 0.1, perMatchLimit: 0, color: '#3f4750', length: 30 },
-  { tier: 6, name: 'Artillery', roman: 'VI',  cost: 60,  reload: 3.0, speed: 510, damage: 1500, blast: 120, unlockCost: 200, reloadUpgradeCost: 90, reloadStep: 0.1, unstoppable: true, perMatchLimit: 1, color: '#6d6a4f', length: 34 },
+  { tier: 1, name: 'Scud',      roman: 'I',   cost: 1.5, reload: 5.0, speed: 255, damage: 15,   blast: 16, unlockCost: 0,   reloadUpgradeCost: 5,   reloadStep: 0.1, perMatchLimit: 0, color: '#c8d2dc', length: 15 },
+  { tier: 2, name: 'Tochka',    roman: 'II',  cost: 4,   reload: 5.0, speed: 340, damage: 45,   blast: 22, unlockCost: 10,  reloadUpgradeCost: 10,  reloadStep: 0.1, perMatchLimit: 0, color: '#a9c6a2', length: 18 },
+  { tier: 3, name: 'Iskander',  roman: 'III', cost: 8,   reload: 5.0, speed: 460, damage: 120,  blast: 30, unlockCost: 30,  reloadUpgradeCost: 22,  reloadStep: 0.1, perMatchLimit: 0, color: '#8fa8bf', length: 22 },
+  { tier: 4, name: 'Topol',     roman: 'IV',  cost: 15,  reload: 5.0, speed: 560, damage: 300,  blast: 40, unlockCost: 80,  reloadUpgradeCost: 40,  reloadStep: 0.1, perMatchLimit: 0, color: '#d8d8d8', length: 26 },
+  { tier: 5, name: 'Satan II',  roman: 'V',   cost: 30,  reload: 5.0, speed: 900, damage: 700,  blast: 55, unlockCost: 120, reloadUpgradeCost: 65,  reloadStep: 0.1, perMatchLimit: 0, color: '#3f4750', length: 30 },
+  { tier: 6, name: 'Bunker Buster', roman: 'VI', cost: 80, reload: 40.0, speed: 540, damage: 1500, blast: 95, unlockCost: 200, reloadUpgradeCost: 90, reloadStep: 0.5, unstoppable: true, perMatchLimit: 0, color: '#6d6a4f', length: 34 },
 ];
 
 // ---------------------------------------------------------------------------
@@ -133,17 +135,19 @@ export interface AaDef {
   /** Cost of one interceptor round for this battery. */
   ammoCost: number;
   ammoCap: number;
+  /** Batteries are destructible; heavier systems are better armoured. */
+  hp: number;
   /** Unique ring / tracer colour (requirement 6). */
   color: string;
 }
 
 export const AA: AaDef[] = [
-  { id: 0, name: 'Radar',   roman: '',    interceptsTier: 0, costs: [0, 30],  baseRadius: 260, baseReload: 0,   radiusUpgradeCost: 11, radiusStep: 10, reloadUpgradeCost: 0,  reloadStep: 0,    ammoCost: 0,  ammoCap: 0,  color: '#7de3ff' },
-  { id: 1, name: 'Avenger', roman: 'I',   interceptsTier: 1, costs: [0, 18],  baseRadius: 175, baseReload: 5.0, radiusUpgradeCost: 14, radiusStep: 5,  reloadUpgradeCost: 4,  reloadStep: 0.05, ammoCost: 2,  ammoCap: 40, color: '#ffd23f' },
-  { id: 2, name: 'Hawk',    roman: 'II',  interceptsTier: 2, costs: [25, 40], baseRadius: 190, baseReload: 5.0, radiusUpgradeCost: 12, radiusStep: 5,  reloadUpgradeCost: 6,  reloadStep: 0.05, ammoCost: 4,  ammoCap: 40, color: '#59e07a' },
-  { id: 3, name: 'Patriot', roman: 'III', interceptsTier: 3, costs: [35, 55], baseRadius: 210, baseReload: 5.0, radiusUpgradeCost: 17, radiusStep: 5,  reloadUpgradeCost: 8,  reloadStep: 0.05, ammoCost: 7,  ammoCap: 40, color: '#ff8b3d' },
-  { id: 4, name: 'S-400',   roman: 'IV',  interceptsTier: 4, costs: [50, 80], baseRadius: 235, baseReload: 5.0, radiusUpgradeCost: 22, radiusStep: 5,  reloadUpgradeCost: 14, reloadStep: 0.05, ammoCost: 13, ammoCap: 40, color: '#c46bff' },
-  { id: 5, name: 'THAAD',   roman: 'V',   interceptsTier: 5, costs: [70, 110],baseRadius: 260, baseReload: 5.0, radiusUpgradeCost: 26, radiusStep: 5,  reloadUpgradeCost: 18, reloadStep: 0.05, ammoCost: 26, ammoCap: 40, color: '#ff5470' },
+  { id: 0, name: 'Radar',   roman: '',    interceptsTier: 0, costs: [0, 30],  baseRadius: 260, baseReload: 0,   radiusUpgradeCost: 11, radiusStep: 10, reloadUpgradeCost: 0,  reloadStep: 0,    ammoCost: 0,  ammoCap: 0, hp: 80,  color: '#7de3ff' },
+  { id: 1, name: 'Avenger', roman: 'I',   interceptsTier: 1, costs: [0, 18],  baseRadius: 175, baseReload: 5.0, radiusUpgradeCost: 14, radiusStep: 5,  reloadUpgradeCost: 4,  reloadStep: 0.05, ammoCost: 2,  ammoCap: 40, hp: 110, color: '#ffd23f' },
+  { id: 2, name: 'Hawk',    roman: 'II',  interceptsTier: 2, costs: [25, 40], baseRadius: 205, baseReload: 5.0, radiusUpgradeCost: 12, radiusStep: 5,  reloadUpgradeCost: 6,  reloadStep: 0.05, ammoCost: 4,  ammoCap: 40, hp: 140, color: '#59e07a' },
+  { id: 3, name: 'Patriot', roman: 'III', interceptsTier: 3, costs: [35, 55], baseRadius: 250, baseReload: 5.0, radiusUpgradeCost: 17, radiusStep: 5,  reloadUpgradeCost: 8,  reloadStep: 0.05, ammoCost: 7,  ammoCap: 40, hp: 180, color: '#ff8b3d' },
+  { id: 4, name: 'S-400',   roman: 'IV',  interceptsTier: 4, costs: [50, 80], baseRadius: 310, baseReload: 5.0, radiusUpgradeCost: 22, radiusStep: 5,  reloadUpgradeCost: 14, reloadStep: 0.05, ammoCost: 13, ammoCap: 40, hp: 230, color: '#c46bff' },
+  { id: 5, name: 'THAAD',   roman: 'V',   interceptsTier: 5, costs: [70, 110],baseRadius: 390, baseReload: 5.0, radiusUpgradeCost: 26, radiusStep: 5,  reloadUpgradeCost: 18, reloadStep: 0.05, ammoCost: 26, ammoCap: 40, hp: 290, color: '#ff5470' },
 ];
 
 export const AA_MAX_PER_TYPE = 2;
@@ -157,8 +161,13 @@ export const INTERCEPTOR_MIN_SPEED = 480;
  */
 export const MIN_INTERCEPT_ALTITUDE = 95;
 
-/** Every repeat purchase of an in-match upgrade multiplies its price by this. */
-export const UPGRADE_COST_GROWTH = 1.35;
+/**
+ * Every repeat purchase of an in-match upgrade multiplies its price by this,
+ * up to UPGRADE_COST_CAP_MULT times the opening price — without the cap the
+ * late-match tiers priced themselves out of reach.
+ */
+export const UPGRADE_COST_GROWTH = 1.16;
+export const UPGRADE_COST_CAP_MULT = 8;
 /** Repeat purchases of a *building* do not get more expensive (matches the original). */
 
 // ---------------------------------------------------------------------------
@@ -227,26 +236,26 @@ export const BOTS: Record<Difficulty, BotProfile> = {
     offenceBudget: 0.35,
     salvoMin: 1,
     salvoMax: 2,
-    aimError: 130,
+    aimError: 95,
     smartTargeting: 0.1,
     maxTier: 2,
-    firstStrikeDelay: 45,
-    ammoTarget: 3,
+    firstStrikeDelay: 35,
+    ammoTarget: 5,
   },
   medium: {
     label: 'Medium',
     blurb: 'Balanced economy, keeps a real air defence up.',
-    incomeMult: 0.95,
-    thinkInterval: 2.2,
-    defenceBudget: 0.36,
-    offenceBudget: 0.42,
+    incomeMult: 1.0,
+    thinkInterval: 1.8,
+    defenceBudget: 0.38,
+    offenceBudget: 0.48,
     salvoMin: 2,
-    salvoMax: 4,
-    aimError: 80,
-    smartTargeting: 0.4,
-    maxTier: 4,
-    firstStrikeDelay: 25,
-    ammoTarget: 6,
+    salvoMax: 5,
+    aimError: 34,
+    smartTargeting: 0.5,
+    maxTier: 5,
+    firstStrikeDelay: 10,
+    ammoTarget: 18,
   },
   hard: {
     label: 'Hard',
@@ -255,13 +264,13 @@ export const BOTS: Record<Difficulty, BotProfile> = {
     thinkInterval: 0.9,
     defenceBudget: 0.42,
     offenceBudget: 0.7,
-    salvoMin: 4,
-    salvoMax: 9,
+    salvoMin: 5,
+    salvoMax: 12,
     aimError: 12,
     smartTargeting: 0.9,
     maxTier: 6,
-    firstStrikeDelay: 3,
-    ammoTarget: 22,
+    firstStrikeDelay: 2,
+    ammoTarget: 32,
   },
 };
 

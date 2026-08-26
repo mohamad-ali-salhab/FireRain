@@ -1,4 +1,4 @@
-import { BUILDINGS, MATCH, META, MISSILES, WORLD } from '../core/config';
+import { MATCH, META, MISSILES, WORLD } from '../core/config';
 import type { MetaSave, SideState } from '../core/types';
 import { audio } from '../core/audio';
 import { noteIncomingTier, updateBot } from './bot';
@@ -12,8 +12,6 @@ import {
   missileReload,
   type Match,
 } from './state';
-
-const CHEAPEST = BUILDINGS[0].cost;
 
 export function stepMatch(match: Match, dt: number, meta: MetaSave): void {
   if (match.phase !== 'playing') return;
@@ -103,13 +101,11 @@ function processLaunches(match: Match, state: SideState, dt: number, meta: MetaS
 }
 
 function checkEnd(match: Match, dt: number, meta: MetaSave): void {
+  // Lose every building and you have MATCH.wipeoutGraceSeconds to put one back up.
   for (const side of [match.player, match.enemy]) {
     const alive = side.buildings.some((b) => !b.destroyed);
-    if (!alive && side.money < CHEAPEST && match.time > MATCH.peaceSeconds) {
-      side.wipeoutTimer += dt;
-    } else {
-      side.wipeoutTimer = 0;
-    }
+    if (!alive && match.time > MATCH.peaceSeconds) side.wipeoutTimer += dt;
+    else side.wipeoutTimer = 0;
   }
 
   const pv = cityValue(match.player);
@@ -117,9 +113,18 @@ function checkEnd(match: Match, dt: number, meta: MetaSave): void {
 
   if (match.player.wipeoutTimer >= MATCH.wipeoutGraceSeconds) return finish(match, false, pv, ev, 'Your city was levelled', meta);
   if (match.enemy.wipeoutTimer >= MATCH.wipeoutGraceSeconds) return finish(match, true, pv, ev, `${match.enemy.name}'s city was levelled`, meta);
-  if (match.time >= match.duration) {
-    const won = pv >= ev;
-    return finish(match, won, pv, ev, won ? 'You held the larger city' : 'Their city outlasted yours', meta);
+  if (isFinite(match.duration) && match.time >= match.duration) {
+    const mine = match.player.stats.valueDestroyed;
+    const theirs = match.enemy.stats.valueDestroyed;
+    const won = mine !== theirs ? mine > theirs : pv > ev;
+    return finish(
+      match,
+      won,
+      pv,
+      ev,
+      won ? 'You did the most damage' : 'They did the most damage',
+      meta,
+    );
   }
 }
 

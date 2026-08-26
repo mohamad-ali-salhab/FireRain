@@ -18,11 +18,11 @@ import {
   buyAaRadius,
   buyAaReload,
   buyAmmo,
-  buyBattery,
   buyBuilding,
   buyMissileUpgrade,
   cityValue,
   clearQueue,
+  countBuildings,
   commitQueue,
   incomePerTick,
   inPeace,
@@ -58,7 +58,12 @@ export interface UiState {
   showRings: boolean;
   aimX: number | null;
   difficulty: Difficulty;
+  /** Infinity for an unlimited match. */
   duration: number;
+  /** Anti-air type awaiting a tap on your own land, or null. */
+  placing: number | null;
+  /** World x under the cursor while placing. */
+  placeX: number | null;
 }
 
 export interface UiHost {
@@ -253,7 +258,9 @@ export class GameUI {
     this.enemyMoney.textContent = money(match.enemy.money);
     this.playerMoney.textContent = money(match.player.money);
     this.enemyName.textContent = match.enemy.name;
-    this.timeEl.textContent = `${clock(match.time)} / ${clock(match.duration)}`;
+    this.timeEl.textContent = isFinite(match.duration)
+      ? `${clock(match.time)} / ${clock(match.duration)}`
+      : `${clock(match.time)} · ∞`;
     const pv = cityValue(match.player);
     const ev = cityValue(match.enemy);
     const total = pv + ev;
@@ -301,9 +308,17 @@ export class GameUI {
     const aiming = ui.panel === 'icbm';
     const queued = match.player.queued.length;
     const pending = match.player.pending.length;
-    this.fightBtn.style.display = aiming ? '' : 'none';
+    this.fightBtn.style.display = aiming && ui.placing === null ? '' : 'none';
     this.fightBtn.classList.toggle('dim', queued === 0 || inPeace(match));
     this.fightBtn.textContent = queued > 0 ? `Fight (${queued})` : 'Fight';
+
+    if (ui.placing !== null) {
+      this.hintEl.style.display = '';
+      const def = AA[ui.placing];
+      const price = aaCost(match.player, ui.placing);
+      this.hintEl.innerHTML = `Tap anywhere on <b>your land</b> to site the ${def.interceptsTier === 0 ? 'radar' : `${def.name} ${def.roman}`} (<b>$${price}</b>). Tap its card again to cancel.`;
+      return;
+    }
 
     if (aiming) {
       this.hintEl.style.display = '';
@@ -456,7 +471,7 @@ export class GameUI {
         onClick: () => {
           const match = this.host.match;
           if (!match) return;
-          if (match.player.builtCount[def.id] >= buildingLimit(match, def.id)) {
+          if (countBuildings(match.player, def.id) >= buildingLimit(match, def.id)) {
             audio.deny();
             this.toast('Build limit reached — wait for the next unlock');
             return;
@@ -471,7 +486,7 @@ export class GameUI {
           const match = this.host.match;
           if (!match) return;
           const limit = buildingLimit(match, def.id);
-          const built = match.player.builtCount[def.id];
+          const built = countBuildings(match.player, def.id);
           count.textContent = `${built}/${limit}`;
           root.classList.toggle('dim', built >= limit || match.player.money < def.cost);
         },
@@ -492,19 +507,28 @@ export class GameUI {
         onClick: () => {
           const match = this.host.match;
           if (!match) return;
+          const ui = this.host.ui;
+          if (ui.placing === def.id) {
+            ui.placing = null;
+            audio.click();
+            return;
+          }
           if (match.player.aaOwned[def.id] >= AA_MAX_PER_TYPE) {
             audio.deny();
             this.toast(`Max ${AA_MAX_PER_TYPE} of each system`);
             return;
           }
-          if (buyBattery(match.player, def.id)) {
-            audio.build();
-            this.host.ui.showRings = true;
-            this.ringsBtn.classList.add('on');
-          } else {
+          const price = aaCost(match.player, def.id);
+          if (match.player.money < price) {
             audio.deny();
             this.toast('Not enough cash');
+            return;
           }
+          ui.placing = def.id;
+          ui.showRings = true;
+          this.ringsBtn.classList.add('on');
+          audio.click();
+          this.toast('Tap your land to place it');
         },
         update: ({ root, count, cost }) => {
           const match = this.host.match;
@@ -514,6 +538,7 @@ export class GameUI {
           const price = aaCost(match.player, def.id);
           cost.textContent = !isFinite(price) ? 'MAX' : price === 0 ? 'Free +1' : `$${price}`;
           root.classList.toggle('dim', !isFinite(price) || match.player.money < price);
+          root.classList.toggle('sel', this.host.ui.placing === def.id);
         },
       });
     }
@@ -688,18 +713,33 @@ export class GameUI {
 
     const lenRow = el('div', 'row center');
     lenRow.style.marginTop = '4px';
-    for (const mins of [5, 10, 15]) {
-      const b = el('button', `btn ghost${ui.duration === mins * 60 ? ' sel' : ''}`, `${mins} min`);
-      if (ui.duration === mins * 60) b.style.borderColor = 'var(--gold)';
+    const lengths: { label: string; value: number }[] = [
+      { label: '5 min', value: 300 },
+      { label: '10 min', value: 600 },
+      { label: '15 min', value: 900 },
+      { label: 'Unlimited', value: Infinity },
+    ];
+    for (const len of lengths) {
+      const b = el('button', 'btn ghost', len.label);
+      if (ui.duration === len.value) b.style.borderColor = 'var(--gold)';
       b.addEventListener('click', () => {
         audio.click();
-        ui.duration = mins * 60;
+        ui.duration = len.value;
         lenRow.querySelectorAll('button').forEach((n) => ((n as HTMLElement).style.borderColor = ''));
         b.style.borderColor = 'var(--gold)';
       });
       lenRow.appendChild(b);
     }
     wrap.appendChild(lenRow);
+    const lenNote = el(
+      'p',
+      'sub',
+      'An unlimited match runs until one city is levelled — lose every building and fail to rebuild within ' +
+        `${MATCH.wipeoutGraceSeconds} seconds and it is over.`,
+    );
+    lenNote.style.margin = '2px 0 0';
+    lenNote.style.fontSize = '12px';
+    wrap.appendChild(lenNote);
 
     const actions = el('div', 'row center');
     actions.style.marginTop = '10px';
@@ -729,8 +769,8 @@ export class GameUI {
     help.style.cssText = 'max-width:620px;color:#aab4c0;font-size:13px;line-height:1.6;margin-top:6px;';
     help.innerHTML = `<summary style="cursor:pointer;font-weight:800;color:#dfe6ee;padding:6px 0">How it works</summary>
       <ul style="padding-left:18px;margin:6px 0">
-        <li><b>Buildings</b> pay income every 2 seconds. Each type has a cap that rises by one every ${MATCH.limitStepSeconds / 60} minutes.</li>
-        <li><b>Anti-air</b> comes in five tiers plus a radar. A tier ${'Ⅰ'}–${'Ⅴ'} battery only stops the matching missile tier — max two of each. The radar does not shoot; it gives you early warning of what is coming.</li>
+        <li><b>Buildings</b> pay income every 2 seconds and go up on a random free plot. Each type has a cap that rises by one every ${MATCH.limitStepSeconds / 60} minutes; a levelled building frees its slot so you can rebuild.</li>
+        <li><b>Anti-air</b> comes in five tiers plus a radar. A tier ${'Ⅰ'}–${'Ⅴ'} battery only stops the matching missile tier — max two of each. Pick a system, then tap your own land to site it wherever you like. Batteries can be bombed, and replaced once they are.</li>
         <li><b>ABM rounds</b> are the ammunition. An empty battery cannot intercept anything.</li>
         <li><b>Upgrades</b> (in-match, paid in cash) widen defence radius, cut anti-air reload, and unlock heavier missiles.</li>
         <li><b>Attacking</b>: open ICBM, pick a tier, tap their city to pin targets, then hit Fight. Each tier launches on its own reload timer.</li>

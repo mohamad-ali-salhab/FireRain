@@ -24,15 +24,21 @@ npm run sim -- 10  # headless balance runs, 10 matches per difficulty
 | 0:00 – 2:00 | **Ceasefire.** Nobody can launch. Build economy and air defence. You can already pin targets. |
 | every 7 min | Every building cap rises by **+1**, up to four times. (Short matches scale this down so a 5-minute game still gets steps.) |
 | every 2 s | Every standing building pays its income. |
-| end of clock | Whoever holds the larger city by build value wins. A side with no buildings and no money to rebuild loses early. |
+| lose everything | With no building standing you have **6 seconds** to put one back up. Fail and you lose. |
+| end of clock | In a timed match, whoever destroyed the most enemy build value wins. **Unlimited** matches have no clock — they run until one city is levelled. |
+
+Cities rebuild, so a timed match is scored on damage done rather than the snapshot
+at the whistle: both sides usually sit at their build cap by the end.
 
 Win or lose you earn **stars**, which buy permanent upgrades in the main-menu Star Shop.
 
 ## The five systems
 
 **Buildings** — nine tiers, `$2`–`$60`. Bigger ones pay more per tick and take far more
-punishment, but each type has a cap. Small blocks go up at the front of your city, towers
-towards the rear, which matters because rear buildings are the hardest to defend.
+punishment, but each type has a cap. Each one goes up on a **random free plot** in your
+land; short types take the front row and tall ones the back purely so the skyline never
+hides itself. A levelled building frees its plot and its slot in the cap, so you can
+always rebuild — and rebuilding under fire is the main drain on a losing side's economy.
 
 **Anti-air** — a radar plus five interceptor tiers, max two of each.
 A tier `N` battery **only** stops a tier `N` missile, so a mixed salvo forces you to have
@@ -40,18 +46,31 @@ all five loaded at once. Each type has its own colour, its own radius ring, and 
 reload. The radar does not shoot: it buys early warning, showing impact markers seconds
 sooner and tracking missiles that are off the top of the screen.
 
+You **site each battery yourself**: pick a system, then tap anywhere on your own land. A
+dashed ghost shows its coverage before you commit, and turns red where you cannot build
+(off your land, or too close to another battery). Batteries are destructible — a direct
+hit wrecks one and frees its slot, so suppressing the air defence before a big salvo is a
+real tactic, and replacing what you lose is a real cost.
+
 **ABM rounds** — the ammunition. A battery with an empty magazine is scenery. Buy in
 ×1 / ×5 / ×10 batches.
 
-**In-match upgrades** — paid in cash, reset at the end of the match, priced up 35 % on
-every purchase:
+**In-match upgrades** — paid in cash, reset at the end of the match, priced up 16 % on
+every purchase and capped at 8× the opening price so a long match never prices them out
+of reach:
 - top row: anti-air **radius**
 - middle row: anti-air **reload**
 - bottom row: **unlock** the next missile tier, then shave its launch reload
 
 **Missiles** — six tiers. Each has its own launcher, so tiers reload in parallel: pin
-five tier-I targets on a 5 s reload and one leaves the pad every five seconds. Tier VI
-is a limited, uninterceptable heavy shell — one per match.
+five tier-I targets on a 5 s reload and one leaves the pad every five seconds. Firing a
+mixed salvo across every tier at once is the strongest play, because the defender can
+only reload one battery per tier at a time.
+
+Speed climbs steeply with tier — 255 m/s at tier I against 900 m/s at tier V — so the
+top of the ladder gives the defence far less time to solve an intercept. Tier VI is the
+**Bunker Buster**: $80 a shot, 1500 damage, and nothing can intercept it, but its
+launcher takes 40 seconds to reload.
 
 To attack: open **ICBM**, pick a tier, tap their city to pin each target (the cash comes
 out as you pin, and **Clear Pins** refunds it), then press **Fight**.
@@ -75,7 +94,7 @@ against a fully stocked defence. That is the pressure the whole economy sits on.
 | `1`–`6` | Select missile tier |
 | `Space` | Fight |
 | `Z` | Un-pin the last target |
-| `Esc` | Close panel / pause |
+| `Esc` | Cancel placement / close panel / pause |
 
 `__rof.speed = 8` in the browser console fast-forwards the clock — handy for checking the
 7-minute cap steps and the day/night cycle without waiting them out.
@@ -94,30 +113,33 @@ src/render/  camera.ts   pan/zoom and world↔screen transforms
              scene.ts    everything drawn on the canvas
 src/ui/      icons.ts    procedural SVG icons
              game-ui.ts  HUD, dock panels, overlays
-tools/sim.ts             headless balance harness
+tools/player.ts          the scripted stand-in for a competent human
+tools/sim.ts             headless balance harness (win rates)
+tools/probe.ts           one instrumented match, sampled every 30 s
 ```
 
 Tuning the game means editing `src/core/config.ts` and re-running `npm run sim`.
 
 ## Balance snapshot
 
-Against the scripted player in `tools/sim.ts`, 12–20 matches per batch, 15-minute matches:
+Against the scripted player in `tools/sim.ts`, 14 matches per batch, 15-minute matches:
 
 | Difficulty | Player win rate |
 | --- | --- |
 | Easy | 100 % every batch |
-| Medium | 25–60 % across batches |
-| Hard | 20–45 % across batches |
+| Medium | 70–95 % across batches |
+| Hard | 60–90 % across batches |
 
-Two caveats worth knowing before you re-tune:
+Caveats before you re-tune:
 
-- **Variance is high and medium/hard overlap.** Outcomes are close to bimodal because a
-  player who banks cash through the ceasefire, unlocks several tiers at once and unloads
-  the moment it lifts can wipe a city inside a minute — while the same opening that misses
-  leaves them behind for the rest of the match. Run at least 20 matches before reading
-  anything into a change, and expect medium to beat hard in some batches.
-- The scripted player fires perfect mixed salvos with no UI overhead, so it is an upper
-  bound on human play. Expect each difficulty to feel a step harder in the hand.
+- **The scripted player is an upper bound, not an average human.** It saturates every
+  launcher continuously and never fumbles a menu, so all three difficulties play harder
+  in the hand than these numbers suggest.
+- **Variance is high and medium/hard overlap.** Run at least 20 matches before reading
+  anything into a change.
+- `npm run probe` prints one instrumented hard match sampled every 30 s — cash, income,
+  batteries, magazines, shots fired and intercepted for both sides. That is far more use
+  for finding *why* a side collapses than the win-rate table.
 
 ## Deploying to Netlify
 
@@ -137,9 +159,9 @@ Project configuration → Build & deploy → Link repository in the Netlify dash
 ## Not built yet
 
 - Multiplayer — the bots are stand-ins for real opponents.
-- Destructible anti-air batteries: right now a missile only damages buildings.
 - Per-launcher ammunition: rounds are a per-type pool shared by both batteries of a tier.
-- Taming the ceasefire-rush variance described above.
+- Moving or selling a battery once it is sited.
+- Taming the medium/hard overlap described above.
 
 Portrait phones work but are cramped — the game is laid out for landscape, and says so
 with a chip in the status bar.

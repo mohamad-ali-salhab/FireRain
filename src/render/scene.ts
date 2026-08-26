@@ -1,4 +1,4 @@
-import { AA, BUILDINGS, MISSILES, WORLD } from '../core/config';
+import { AA, BUILDINGS, MATCH, MISSILES, WORLD } from '../core/config';
 import type { AaBattery, Building, MetaSave } from '../core/types';
 import { aaRadius, hash01, launchPadX, type Match } from '../game/state';
 import { Camera } from './camera';
@@ -14,6 +14,8 @@ export interface SceneOpts {
   meta: MetaSave;
   /** With a radar you see incoming fire early; without it, only at the last second. */
   hasRadar: boolean;
+  /** Anti-air type being sited by hand, with the cursor position and validity. */
+  deploy: { type: number; x: number | null; valid: boolean; radius: number } | null;
 }
 
 const SKY_DAY = ['#3c4147', '#6d757e', '#b9bfc6', '#d6dade'];
@@ -52,6 +54,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, match: Match, cam: Came
   drawInterceptors(ctx, cam, match);
   drawParticles(ctx, cam, match);
   drawPins(ctx, cam, match, opts);
+  if (opts.deploy) drawDeployPreview(ctx, cam, opts.deploy);
   drawTexts(ctx, cam, match);
 
   ctx.restore();
@@ -62,9 +65,13 @@ export function drawScene(ctx: CanvasRenderingContext2D, match: Match, cam: Came
 // ---------------------------------------------------------------------------
 
 /** 0 = full day, 1 = full night. Kick-off is daylight, midnight is mid-match. */
+export function dayPhase(match: Match): number {
+  const period = isFinite(match.duration) && match.duration > 0 ? match.duration : MATCH.unlimitedCycleSeconds;
+  return (match.time / period) % 1;
+}
+
 export function nightAmount(match: Match): number {
-  const p = match.duration > 0 ? (match.time / match.duration) % 1 : 0;
-  return Math.min(1, Math.max(0, (1 - Math.cos(p * Math.PI * 2)) / 2));
+  return Math.min(1, Math.max(0, (1 - Math.cos(dayPhase(match) * Math.PI * 2)) / 2));
 }
 
 function mix(a: string, b: string, t: number): string {
@@ -97,7 +104,7 @@ function drawSky(ctx: CanvasRenderingContext2D, cam: Camera, night: number): voi
 }
 
 function drawCelestial(ctx: CanvasRenderingContext2D, cam: Camera, match: Match, night: number): void {
-  const p = match.duration > 0 ? (match.time / match.duration) % 1 : 0;
+  const p = dayPhase(match);
   const r = Math.max(13, cam.viewW * 0.02);
   // The sun owns the first half of the cycle, the moon the second.
   drawOrb(ctx, cam, p * 2, 1 - night, r, 'sun');
@@ -443,7 +450,8 @@ function drawBattery(ctx: CanvasRenderingContext2D, cam: Camera, b: AaBattery, n
   const dark = mix('#4b535e', '#242b36', night);
 
   ctx.save();
-  ctx.translate(x, gy);
+  const jitter = b.shake > 0 ? b.shake * 6 * s : 0;
+  ctx.translate(x + (Math.random() - 0.5) * jitter, gy + (Math.random() - 0.5) * jitter * 0.4);
   ctx.scale(1.4, 1.4);
 
   // Tracked chassis
@@ -507,6 +515,61 @@ function drawBattery(ctx: CanvasRenderingContext2D, cam: Camera, b: AaBattery, n
     ctx.textAlign = 'center';
     ctx.fillText(def.roman, x, gy - 38 * s);
   }
+
+  // Damage read-out — batteries can now be shot to pieces.
+  const ratio = b.maxHp > 0 ? b.hp / b.maxHp : 1;
+  if (ratio < 0.999) {
+    const bw = Math.max(16, 30 * s);
+    const by = gy - 46 * s;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(x - bw / 2, by, bw, Math.max(2.5, 3.2 * s));
+    ctx.fillStyle = ratio > 0.5 ? '#69d97f' : ratio > 0.25 ? '#ffc341' : '#ff5a4d';
+    ctx.fillRect(x - bw / 2, by, bw * ratio, Math.max(2.5, 3.2 * s));
+  }
+}
+
+/** Ghost turret and coverage ring while the player is siting a new battery. */
+function drawDeployPreview(
+  ctx: CanvasRenderingContext2D,
+  cam: Camera,
+  deploy: { type: number; x: number | null; valid: boolean; radius: number },
+): void {
+  if (deploy.x === null) return;
+  const def = AA[deploy.type];
+  const x = cam.toScreenX(deploy.x);
+  const gy = cam.groundScreenY();
+  const ok = deploy.valid;
+  const color = ok ? def.color : '#ff5a4d';
+
+  ctx.save();
+  ctx.globalAlpha = 0.85;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(1.4, 2 * cam.scale);
+  ctx.setLineDash([7, 5]);
+  ctx.beginPath();
+  ctx.arc(x, gy - 16 * cam.scale, deploy.radius * cam.scale, Math.PI, 0);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Footprint marker
+  ctx.globalAlpha = ok ? 0.9 : 0.7;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.ellipse(x, gy - 2, Math.max(12, 22 * cam.scale), Math.max(4, 7 * cam.scale), 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#0d1016';
+  ctx.font = `bold ${Math.max(10, 12 * cam.scale)}px system-ui, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText(ok ? def.roman || 'R' : '✕', x, gy + Math.max(3, 3 * cam.scale));
+
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(1.2, 1.8 * cam.scale);
+  ctx.beginPath();
+  ctx.moveTo(x, gy - 10 * cam.scale);
+  ctx.lineTo(x, gy - 44 * cam.scale);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function drawRings(ctx: CanvasRenderingContext2D, cam: Camera, match: Match, meta: MetaSave): void {

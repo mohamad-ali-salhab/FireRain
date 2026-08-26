@@ -7,6 +7,8 @@ import {
   MATCH,
   META,
   MISSILES,
+  UPGRADE_COST_CAP_MULT,
+  UPGRADE_COST_GROWTH,
   WORLD,
   type Difficulty,
 } from '../core/config';
@@ -72,36 +74,15 @@ export function hash01(n: number): number {
 
 const SLOTS_PER_LAYER = 40;
 
-/**
- * Candidate x positions for one layer of a city, ordered from the front line
- * (facing the enemy) to the rear. `rear` runs 0 → 1 going away from the enemy.
- */
-function citySlots(side: Side, layer: 0 | 1): { x: number; rear: number }[] {
+/** Candidate plots across one layer of a side's land. */
+function citySlots(side: Side, layer: 0 | 1): { x: number }[] {
   const zone = side === 'player' ? WORLD.cityRight : WORLD.cityLeft;
   const width = zone.x1 - zone.x0;
   const step = width / SLOTS_PER_LAYER;
   const offset = layer === 0 ? step * 0.5 : 0;
-  const out: { x: number; rear: number }[] = [];
+  const out: { x: number }[] = [];
   for (let i = 0; i < SLOTS_PER_LAYER; i++) {
-    const f = i / (SLOTS_PER_LAYER - 1);
-    // Player city sits on the right, so "rear" means larger x. Mirrored for the enemy.
-    const x = zone.x0 + offset + (side === 'player' ? f : 1 - f) * (width - offset);
-    out.push({ x, rear: f });
-  }
-  return out;
-}
-
-const AA_SLOT_COUNT = 12;
-
-function batterySlots(side: Side): number[] {
-  const zone = side === 'player' ? WORLD.cityRight : WORLD.cityLeft;
-  const width = zone.x1 - zone.x0;
-  const out: number[] = [];
-  for (let i = 0; i < AA_SLOT_COUNT; i++) {
-    const f = (i + 0.5) / AA_SLOT_COUNT;
-    // Batteries hug the front two thirds of the city.
-    const d = f * width * 0.78;
-    out.push(side === 'player' ? zone.x0 + d : zone.x1 - d);
+    out.push({ x: zone.x0 + offset + (i / (SLOTS_PER_LAYER - 1)) * (width - offset) });
   }
   return out;
 }
@@ -110,31 +91,36 @@ function layerFor(type: number): 0 | 1 {
   return type >= 4 ? 0 : 1;
 }
 
-/** Picks the nicest free slot for a new building, keeping tall towers to the rear. */
-function pickSlot(state: SideState, type: number): { x: number; layer: 0 | 1 } {
+/**
+ * Picks a random free plot in the side's own land. Tall types live on the back
+ * layer and short ones at the front purely so the skyline never hides itself;
+ * within a layer the position is genuinely random.
+ */
+function pickSlot(state: SideState, type: number): { x: number; layer: 0 | 1; clears: Building | null } {
   const layer = layerFor(type);
   const slots = citySlots(state.side, layer);
-  const taken = new Set(state.buildings.filter((b) => b.layer === layer).map((b) => Math.round(b.x)));
-  const minType = layer === 0 ? 4 : 0;
-  const maxType = layer === 0 ? 8 : 3;
-  const ideal = (type - minType) / Math.max(1, maxType - minType);
-  const ranked = slots
-    .map((s, i) => ({
-      ...s,
-      score: Math.abs(s.rear - ideal) + hash01(i * 7 + type * 31 + (state.side === 'player' ? 0 : 500)) * 0.22,
-    }))
-    .sort((a, b) => a.score - b.score);
-  for (const s of ranked) {
-    if (!taken.has(Math.round(s.x))) return { x: s.x, layer };
+  const occupied = new Map<number, Building>();
+  for (const b of state.buildings) {
+    if (b.layer !== layer) continue;
+    occupied.set(Math.round(b.x), b);
   }
-  return { x: ranked[0].x, layer };
-}
 
-function pickBatterySlot(state: SideState): number {
-  const slots = batterySlots(state.side);
-  const taken = new Set(state.batteries.map((b) => Math.round(b.x)));
-  for (const x of slots) if (!taken.has(Math.round(x))) return x;
-  return slots[slots.length - 1];
+  const free = slots.filter((sl) => !occupied.has(Math.round(sl.x)));
+  if (free.length) {
+    const pick = free[Math.floor(Math.random() * free.length)];
+    return { x: pick.x, layer, clears: null };
+  }
+
+  // Every plot is taken; build on a levelled one and clear its rubble.
+  const rubbled = slots
+    .map((sl) => occupied.get(Math.round(sl.x)))
+    .filter((b): b is Building => !!b && b.destroyed);
+  if (rubbled.length) {
+    const pick = rubbled[Math.floor(Math.random() * rubbled.length)];
+    return { x: pick.x, layer, clears: pick };
+  }
+  const any = slots[Math.floor(Math.random() * slots.length)];
+  return { x: any.x, layer, clears: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -159,11 +145,10 @@ function makeSide(side: Side, name: string): SideState {
     missileReloadPrice: MISSILES.map((m) => m.reloadUpgradeCost),
     launchCooldown: MISSILES.map(() => 0),
     shotsUsed: MISSILES.map(() => 0),
-    builtCount: BUILDINGS.map(() => 0),
     pending: [],
     queued: [],
     wipeoutTimer: 0,
-    stats: { launched: 0, intercepted: 0, hits: 0, destroyedBuildings: 0, spent: 0, earned: 0 },
+    stats: { launched: 0, intercepted: 0, hits: 0, destroyedBuildings: 0, destroyedBatteries: 0, valueDestroyed: 0, spent: 0, earned: 0 },
   };
 }
 
@@ -252,14 +237,21 @@ export function hasRadar(state: SideState): boolean {
 // Purchases — all return true when the money actually changed hands
 // ---------------------------------------------------------------------------
 
+/** Standing buildings of a type — destroyed ones free their slot in the cap. */
+export function countBuildings(state: SideState, type: number): number {
+  let n = 0;
+  for (const b of state.buildings) if (b.type === type && !b.destroyed) n++;
+  return n;
+}
+
 export function buyBuilding(match: Match, state: SideState, type: number): boolean {
   const def = BUILDINGS[type];
-  if (state.builtCount[type] >= buildingLimit(match, type)) return false;
+  if (countBuildings(state, type) >= buildingLimit(match, type)) return false;
   if (state.money < def.cost) return false;
   state.money -= def.cost;
   state.stats.spent += def.cost;
-  state.builtCount[type]++;
   const slot = pickSlot(state, type);
+  if (slot.clears) state.buildings.splice(state.buildings.indexOf(slot.clears), 1);
   const b: Building = {
     uid: nextUid(),
     type,
@@ -279,9 +271,31 @@ export function buyBuilding(match: Match, state: SideState, type: number): boole
   return true;
 }
 
-export function buyBattery(state: SideState, type: number): boolean {
+/** Land a side may site anti-air on. */
+export function deployZone(side: Side): { x0: number; x1: number } {
+  const zone = side === 'player' ? WORLD.cityRight : WORLD.cityLeft;
+  return side === 'player'
+    ? { x0: zone.x0 - AA_DEPLOY_MARGIN, x1: zone.x1 }
+    : { x0: zone.x0, x1: zone.x1 + AA_DEPLOY_MARGIN };
+}
+
+const AA_DEPLOY_MARGIN = 150;
+
+export function canDeployAt(state: SideState, x: number): boolean {
+  const zone = deployZone(state.side);
+  if (x < zone.x0 || x > zone.x1) return false;
+  return state.batteries.every((b) => Math.abs(b.x - x) >= AA_MIN_SPACING);
+}
+
+export const AA_MIN_SPACING = 34;
+
+/** Places a battery at x. Pass no x for a random spot in the side's own land. */
+export function buyBattery(state: SideState, type: number, x?: number): boolean {
   const cost = aaCost(state, type);
   if (!isFinite(cost) || state.money < cost) return false;
+  const at = x === undefined ? randomDeploySpot(state) : x;
+  if (at === null) return false;
+  if (!canDeployAt(state, at)) return false;
   state.money -= cost;
   state.stats.spent += cost;
   state.aaOwned[type]++;
@@ -289,14 +303,67 @@ export function buyBattery(state: SideState, type: number): boolean {
     uid: nextUid(),
     type,
     side: state.side,
-    x: pickBatterySlot(state),
+    x: at,
+    hp: AA[type].hp,
+    maxHp: AA[type].hp,
     cooldown: 0,
     aim: state.side === 'player' ? -Math.PI * 0.72 : -Math.PI * 0.28,
     recoil: 0,
+    shake: 0,
     seed: Math.floor(Math.random() * 100000),
   };
   state.batteries.push(battery);
   return true;
+}
+
+/**
+ * Where a computer opponent should site a battery: the spot whose coverage
+ * takes in the most building value that this tier's existing batteries miss.
+ * Scattering them at random leaves holes an attacker walks straight through.
+ */
+export function bestDeploySpot(state: SideState, type: number, radius: number): number | null {
+  const zone = deployZone(state.side);
+  const alive = state.buildings.filter((b) => !b.destroyed);
+  const sameTier = state.batteries.filter((b) => b.type === type);
+  let best: number | null = null;
+  let bestScore = -Infinity;
+  const steps = 48;
+  for (let i = 0; i <= steps; i++) {
+    const x = zone.x0 + ((zone.x1 - zone.x0) * i) / steps;
+    if (!canDeployAt(state, x)) continue;
+    let score = 0;
+    for (const b of alive) {
+      const d = Math.abs(b.x - x);
+      if (d > radius) continue;
+      // Value already inside another battery of this tier counts for much less.
+      const covered = sameTier.some((o) => Math.abs(b.x - o.x) <= radius);
+      score += BUILDINGS[b.type].cost * (covered ? 0.15 : 1);
+    }
+    // With nothing built yet, favour the middle of the plot.
+    if (!alive.length) score = -Math.abs(x - (zone.x0 + zone.x1) / 2);
+    if (score > bestScore) {
+      bestScore = score;
+      best = x;
+    }
+  }
+  return best ?? randomDeploySpot(state);
+}
+
+function randomDeploySpot(state: SideState): number | null {
+  const zone = deployZone(state.side);
+  for (let i = 0; i < 60; i++) {
+    const x = zone.x0 + Math.random() * (zone.x1 - zone.x0);
+    if (canDeployAt(state, x)) return x;
+  }
+  return null;
+}
+
+/** Called when a battery is blown up: it frees its slot so it can be replaced. */
+export function removeBattery(state: SideState, uid: number): void {
+  const i = state.batteries.findIndex((b) => b.uid === uid);
+  if (i < 0) return;
+  const [dead] = state.batteries.splice(i, 1);
+  state.aaOwned[dead.type] = Math.max(0, state.aaOwned[dead.type] - 1);
 }
 
 export function buyAmmo(state: SideState, type: number, count: number): number {
@@ -314,13 +381,18 @@ export function buyAmmo(state: SideState, type: number, count: number): number {
   return bought;
 }
 
+/** Next price for a repeatable in-match upgrade, capped so it stays payable. */
+function bumpPrice(price: number, base: number): number {
+  return Math.min(Math.ceil(base * UPGRADE_COST_CAP_MULT), Math.ceil(price * UPGRADE_COST_GROWTH));
+}
+
 export function buyAaRadius(state: SideState, type: number): boolean {
   const price = state.aaRadiusPrice[type];
   if (state.money < price) return false;
   state.money -= price;
   state.stats.spent += price;
   state.aaRadiusBonus[type] += AA[type].radiusStep;
-  state.aaRadiusPrice[type] = Math.ceil(price * 1.35);
+  state.aaRadiusPrice[type] = bumpPrice(price, AA[type].radiusUpgradeCost);
   return true;
 }
 
@@ -332,7 +404,7 @@ export function buyAaReload(state: SideState, type: number, meta: MetaSave): boo
   state.money -= price;
   state.stats.spent += price;
   state.aaReloadBonus[type] += AA[type].reloadStep;
-  state.aaReloadPrice[type] = Math.ceil(price * 1.35);
+  state.aaReloadPrice[type] = bumpPrice(price, AA[type].reloadUpgradeCost);
   return true;
 }
 
@@ -353,7 +425,7 @@ export function buyMissileUpgrade(state: SideState, tier: number, meta: MetaSave
   state.money -= price;
   state.stats.spent += price;
   state.missileReloadBonus[i] += def.reloadStep;
-  state.missileReloadPrice[i] = Math.ceil(price * 1.35);
+  state.missileReloadPrice[i] = bumpPrice(price, def.reloadUpgradeCost);
   return 'reload';
 }
 

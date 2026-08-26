@@ -9,7 +9,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "sim": "npx esbuild tools/sim.ts --bundle --platform=node --format=esm --outfile=node_modules/.rof-sim.mjs --log-level=warning && node node_modules/.rof-sim.mjs"
+    "sim": "npx esbuild tools/sim.ts --bundle --platform=node --format=esm --outfile=node_modules/.rof-sim.mjs --log-level=warning && node node_modules/.rof-sim.mjs",
+    "probe": "npx esbuild tools/probe.ts --bundle --platform=node --format=esm --outfile=node_modules/.rof-probe.mjs --log-level=warning && node node_modules/.rof-probe.mjs"
   },
   "devDependencies": {
     "typescript": "^5.9.0",

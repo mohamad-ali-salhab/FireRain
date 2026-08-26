@@ -9,7 +9,7 @@ import {
 } from '../core/config';
 import type { Building, Interceptor, MetaSave, Missile, Particle, SideState } from '../core/types';
 import { audio } from '../core/audio';
-import { aaRadius, aaReload, hash01, launchPadX, nextUid, type Match } from './state';
+import { aaRadius, aaReload, hash01, launchPadX, nextUid, removeBattery, type Match } from './state';
 
 // ---------------------------------------------------------------------------
 // Ballistics
@@ -128,6 +128,7 @@ export function updateDefences(match: Match, dt: number, meta: MetaSave): void {
       const def = AA[b.type];
       if (b.cooldown > 0) b.cooldown -= dt;
       if (b.recoil > 0) b.recoil = Math.max(0, b.recoil - dt * 3.2);
+      if (b.shake > 0) b.shake = Math.max(0, b.shake - dt * 1.6);
       if (def.interceptsTier === 0) continue; // radar never fires
 
       const radius = aaRadius(state, b.type, meta);
@@ -254,6 +255,22 @@ function impact(match: Match, m: Missile): void {
   explosionBurst(match, m.tx, WORLD.groundY, m.blast, m.tier);
   match.shake = Math.max(match.shake, 5 + m.tier * 3.5);
 
+  // Anti-air is a legitimate target now — a direct hit takes a battery out.
+  let batteriesKilled = 0;
+  for (const bat of [...defender.batteries]) {
+    const dx = Math.max(0, Math.abs(bat.x - m.tx) - AA_HALF_WIDTH);
+    if (dx > m.blast) continue;
+    const falloff = dx <= 0 ? 1 : 1 - dx / m.blast;
+    bat.hp -= m.damage * (0.3 + 0.7 * falloff);
+    bat.shake = Math.max(bat.shake, 0.4 + falloff * 0.5);
+    if (bat.hp <= 0) {
+      batteryWreck(match, bat);
+      removeBattery(defender, bat.uid);
+      defender.stats.destroyedBatteries++;
+      batteriesKilled++;
+    }
+  }
+
   let killed = 0;
   for (const b of defender.buildings) {
     if (b.destroyed) continue;
@@ -262,7 +279,7 @@ function impact(match: Match, m: Missile): void {
     const dx = Math.max(0, Math.abs(b.x - m.tx) - half);
     if (dx > m.blast) continue;
     const falloff = dx <= 0 ? 1 : 1 - dx / m.blast;
-    const dmg = m.damage * (0.35 + 0.65 * falloff);
+    const dmg = m.damage * (0.18 + 0.82 * falloff * falloff);
     b.hp -= dmg;
     b.shake = Math.max(b.shake, 0.35 + falloff * 0.5);
     if (b.hp <= 0) {
@@ -271,6 +288,7 @@ function impact(match: Match, m: Missile): void {
       b.collapse = 0;
       killed++;
       defender.stats.destroyedBuildings++;
+      attacker.stats.valueDestroyed += def.cost;
       collapseBurst(match, b);
     }
   }
@@ -279,11 +297,17 @@ function impact(match: Match, m: Missile): void {
     match.shake = Math.max(match.shake, 9);
   }
 
+  const label =
+    batteriesKilled > 0
+      ? `-${batteriesKilled} anti-air`
+      : killed > 0
+        ? `-${killed} ${killed === 1 ? 'building' : 'buildings'}`
+        : `${MISSILES[m.tier - 1].roman} hit`;
   match.texts.push({
     x: m.tx,
     y: WORLD.groundY - 60,
-    text: killed > 0 ? `-${killed} ${killed === 1 ? 'building' : 'buildings'}` : `${MISSILES[m.tier - 1].roman} hit`,
-    color: killed > 0 ? '#ff6b5e' : '#ffd980',
+    text: label,
+    color: killed > 0 || batteriesKilled > 0 ? '#ff6b5e' : '#ffd980',
     life: 1.6,
     maxLife: 1.6,
   });
@@ -391,6 +415,35 @@ function explosionBurst(match: Match, x: number, y: number, blast: number, tier:
     });
   }
   for (let i = 0; i < 16 + tier * 6; i++) match.particles.push(smoke(x + (Math.random() - 0.5) * blast, y - Math.random() * 40, 8 + Math.random() * 14));
+}
+
+/** Rough half-width of a battery footprint, used for splash hit tests. */
+export const AA_HALF_WIDTH = 20;
+
+function batteryWreck(match: Match, bat: { x: number; type: number }): void {
+  const color = AA[bat.type].color;
+  const y = WORLD.groundY - 10;
+  match.particles.push({ kind: 'flash', x: bat.x, y, vx: 0, vy: 0, life: 0.2, maxLife: 0.2, size: 40, color: '#fff0c0', gravity: 0 });
+  match.particles.push({ kind: 'ring', x: bat.x, y, vx: 0, vy: 0, life: 0.55, maxLife: 0.55, size: 12, color, gravity: 0 });
+  for (let i = 0; i < 26; i++) {
+    const a = -Math.PI * 0.5 + (Math.random() - 0.5) * Math.PI * 1.4;
+    const sp = 90 + Math.random() * 260;
+    match.particles.push({
+      kind: 'debris',
+      x: bat.x + (Math.random() - 0.5) * 24,
+      y,
+      vx: Math.cos(a) * sp,
+      vy: Math.sin(a) * sp,
+      life: 0.8 + Math.random(),
+      maxLife: 1.8,
+      size: 2 + Math.random() * 4,
+      color: i % 4 === 0 ? color : '#4a515b',
+      gravity: 520,
+      rot: Math.random() * 6.28,
+      vrot: (Math.random() - 0.5) * 14,
+    });
+  }
+  for (let i = 0; i < 12; i++) match.particles.push(smoke(bat.x + (Math.random() - 0.5) * 26, y, 8 + Math.random() * 10));
 }
 
 function collapseBurst(match: Match, b: Building): void {

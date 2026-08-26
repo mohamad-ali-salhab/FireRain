@@ -5,6 +5,13 @@
 [build.environment]
   NODE_VERSION = "22"
 
+# The game canvas fills the viewport and the launcher cards sit in the
+# bottom-right corner, which is exactly where Netlify's injected HUD badge
+# lands — it covered the top-tier missile card. Skipping post-processing stops
+# the snippet being injected.
+[build.processing]
+  skip_processing = true
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
