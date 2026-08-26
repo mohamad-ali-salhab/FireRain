@@ -1,5 +1,7 @@
 # Rain of Fire
 
+**Live: https://rain-of-fire.netlify.app**
+
 A browser clone of the mobile missile-vs-city strategy game: build an economy, screen
 it with layered anti-air, and level the other side's skyline before the clock runs out.
 
@@ -119,13 +121,18 @@ Two caveats worth knowing before you re-tune:
 
 ## Deploying to Netlify
 
-`netlify.toml` is already set up (`npm run build` → `dist`, SPA redirect, Node 22):
+Deployed to the `rain-of-fire` project on Netlify — https://rain-of-fire.netlify.app.
+`netlify.toml` drives it (`npm run build` → `dist`, SPA redirect, Node 22).
+
+To ship a change:
 
 ```bash
 npx netlify-cli deploy --prod      # after `netlify login` and `netlify link`
 ```
 
-Or point Netlify at the repo and it will pick the config up on its own.
+The project is **not** wired to the GitHub repo yet, so pushing a commit does not
+redeploy on its own. To get continuous deploys, connect the repo under
+Project configuration → Build & deploy → Link repository in the Netlify dashboard.
 
 ## Not built yet
 
