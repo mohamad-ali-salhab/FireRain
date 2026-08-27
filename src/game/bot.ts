@@ -241,7 +241,7 @@ function chooseTarget(match: Match, p: BotProfile): number {
   let x: number;
 
   // Suppress the air defence first when it is smart enough to think of it.
-  if (player.batteries.length && Math.random() < p.smartTargeting * 0.14) {
+  if (player.batteries.length && Math.random() < p.smartTargeting * 0.09) {
     const bat = player.batteries[Math.floor(Math.random() * player.batteries.length)];
     return Math.max(zone.x0 - 160, Math.min(zone.x1 + 60, bat.x + (Math.random() - 0.5) * p.aimError));
   }

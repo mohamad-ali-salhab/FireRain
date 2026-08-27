@@ -142,12 +142,12 @@ export interface AaDef {
 }
 
 export const AA: AaDef[] = [
-  { id: 0, name: 'Radar',   roman: '',    interceptsTier: 0, costs: [0, 30],  baseRadius: 260, baseReload: 0,   radiusUpgradeCost: 11, radiusStep: 10, reloadUpgradeCost: 0,  reloadStep: 0,    ammoCost: 0,  ammoCap: 0, hp: 80,  color: '#7de3ff' },
-  { id: 1, name: 'Avenger', roman: 'I',   interceptsTier: 1, costs: [0, 18],  baseRadius: 175, baseReload: 5.0, radiusUpgradeCost: 14, radiusStep: 5,  reloadUpgradeCost: 4,  reloadStep: 0.05, ammoCost: 2,  ammoCap: 40, hp: 110, color: '#ffd23f' },
-  { id: 2, name: 'Hawk',    roman: 'II',  interceptsTier: 2, costs: [25, 40], baseRadius: 205, baseReload: 5.0, radiusUpgradeCost: 12, radiusStep: 5,  reloadUpgradeCost: 6,  reloadStep: 0.05, ammoCost: 4,  ammoCap: 40, hp: 140, color: '#59e07a' },
-  { id: 3, name: 'Patriot', roman: 'III', interceptsTier: 3, costs: [35, 55], baseRadius: 250, baseReload: 5.0, radiusUpgradeCost: 17, radiusStep: 5,  reloadUpgradeCost: 8,  reloadStep: 0.05, ammoCost: 7,  ammoCap: 40, hp: 180, color: '#ff8b3d' },
-  { id: 4, name: 'S-400',   roman: 'IV',  interceptsTier: 4, costs: [50, 80], baseRadius: 310, baseReload: 5.0, radiusUpgradeCost: 22, radiusStep: 5,  reloadUpgradeCost: 14, reloadStep: 0.05, ammoCost: 13, ammoCap: 40, hp: 230, color: '#c46bff' },
-  { id: 5, name: 'THAAD',   roman: 'V',   interceptsTier: 5, costs: [70, 110],baseRadius: 390, baseReload: 5.0, radiusUpgradeCost: 26, radiusStep: 5,  reloadUpgradeCost: 18, reloadStep: 0.05, ammoCost: 26, ammoCap: 40, hp: 290, color: '#ff5470' },
+  { id: 0, name: 'Radar',   roman: '',    interceptsTier: 0, costs: [0, 30],  baseRadius: 260, baseReload: 0,   radiusUpgradeCost: 11, radiusStep: 10, reloadUpgradeCost: 0,  reloadStep: 0,    ammoCost: 0,  ammoCap: 0, hp: 220, color: '#7de3ff' },
+  { id: 1, name: 'Avenger', roman: 'I',   interceptsTier: 1, costs: [0, 18],  baseRadius: 175, baseReload: 5.0, radiusUpgradeCost: 14, radiusStep: 5,  reloadUpgradeCost: 4,  reloadStep: 0.05, ammoCost: 2,  ammoCap: 40, hp: 260, color: '#ffd23f' },
+  { id: 2, name: 'Hawk',    roman: 'II',  interceptsTier: 2, costs: [25, 40], baseRadius: 205, baseReload: 5.0, radiusUpgradeCost: 12, radiusStep: 5,  reloadUpgradeCost: 6,  reloadStep: 0.05, ammoCost: 4,  ammoCap: 40, hp: 330, color: '#59e07a' },
+  { id: 3, name: 'Patriot', roman: 'III', interceptsTier: 3, costs: [35, 55], baseRadius: 250, baseReload: 5.0, radiusUpgradeCost: 17, radiusStep: 5,  reloadUpgradeCost: 8,  reloadStep: 0.05, ammoCost: 7,  ammoCap: 40, hp: 410, color: '#ff8b3d' },
+  { id: 4, name: 'S-400',   roman: 'IV',  interceptsTier: 4, costs: [50, 80], baseRadius: 310, baseReload: 5.0, radiusUpgradeCost: 22, radiusStep: 5,  reloadUpgradeCost: 14, reloadStep: 0.05, ammoCost: 13, ammoCap: 40, hp: 520, color: '#c46bff' },
+  { id: 5, name: 'THAAD',   roman: 'V',   interceptsTier: 5, costs: [70, 110],baseRadius: 390, baseReload: 5.0, radiusUpgradeCost: 26, radiusStep: 5,  reloadUpgradeCost: 18, reloadStep: 0.05, ammoCost: 26, ammoCap: 40, hp: 650, color: '#ff5470' },
 ];
 
 export const AA_MAX_PER_TYPE = 2;

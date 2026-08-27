@@ -263,6 +263,7 @@ export function buyBuilding(match: Match, state: SideState, type: number): boole
     destroyed: false,
     collapse: 0,
     shake: 0,
+    smokeAcc: 0,
     seed: Math.floor(Math.random() * 100000),
   };
   state.buildings.push(b);

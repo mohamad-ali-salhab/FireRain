@@ -330,6 +330,17 @@ const debug = {
     m.player.money = before;
     return out;
   },
+  /** Playtesting helper: knock the enemy city down to a given health fraction. */
+  damageEnemy(fraction = 0.4) {
+    const m = host.match;
+    if (!m) return null;
+    for (const b of m.enemy.buildings) {
+      if (b.destroyed) continue;
+      b.hp = Math.max(1, b.maxHp * fraction * (0.4 + Math.random() * 1.2));
+      if (b.hp > b.maxHp) b.hp = b.maxHp;
+    }
+    return m.enemy.buildings.length;
+  },
   missileTable() {
     return MISSILES.map((d) => ({ tier: d.roman, cost: d.cost, speed: d.speed, dmg: d.damage, reload: d.reload }));
   },

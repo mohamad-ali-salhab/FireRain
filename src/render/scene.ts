@@ -1,5 +1,6 @@
 import { AA, BUILDINGS, MATCH, MISSILES, WORLD } from '../core/config';
 import type { AaBattery, Building, MetaSave } from '../core/types';
+import { standingFraction } from '../game/combat';
 import { aaRadius, hash01, launchPadX, type Match } from '../game/state';
 import { Camera } from './camera';
 
@@ -279,9 +280,14 @@ function drawBuilding(
   const gy = cam.groundScreenY();
   const back = b.layer === 0;
   const w = def.w * s;
-  let h = def.h * s;
   let x = cam.toScreenX(b.x);
   let y = gy - (back ? 4 * s : 0);
+
+  const ratio = b.maxHp > 0 ? Math.max(0, b.hp / b.maxHp) : 0;
+  // A battered tower loses its upper floors rather than just changing colour.
+  const standing = standingFraction(b);
+  let h = def.h * standing * s;
+  const fullH = def.h * s;
 
   if (b.destroyed) {
     const t = b.collapse;
@@ -296,9 +302,9 @@ function drawBuilding(
     y += (Math.random() - 0.5) * b.shake * 3 * s;
   }
 
-  const ratio = b.maxHp > 0 ? b.hp / b.maxHp : 0;
   const body = back ? mix('#39414b', '#1c222e', night) : mix('#232a33', '#11151d', night);
   const edge = back ? mix('#454e59', '#242b39', night) : mix('#2e3641', '#171d27', night);
+  const broken = ratio < 0.995 && !b.destroyed;
 
   ctx.save();
   if (highlight) {
@@ -311,12 +317,13 @@ function drawBuilding(
   ctx.fillRect(x - w / 2, y - h, Math.max(1, w * 0.14), h);
   ctx.restore();
 
-  drawRoof(ctx, def.roof, x, y - h, w, s, body, edge);
+  if (broken) drawBrokenTop(ctx, x, y - h, w, s, b.seed, body, night);
+  else drawRoof(ctx, def.roof, x, y - h, w, s, body, edge);
 
-  // Windows
+  // Windows — only across the floors that are still there.
   if (h > 8 && w > 4) {
     const litBase = 0.18 + night * 0.62;
-    const rows = def.windowRows;
+    const rows = Math.max(1, Math.round(def.windowRows * standing));
     const cols = def.windowCols;
     const pad = w * 0.16;
     const cw = (w - pad * 2) / cols;
@@ -327,8 +334,8 @@ function drawBuilding(
       for (let c = 0; c < cols; c++) {
         const seed = b.seed + r * 31 + c * 7;
         const roll = hash01(seed);
-        // Damaged floors go dark from the top down.
-        const floorAlive = 1 - r / rows < ratio + 0.08;
+        // The top floors of a damaged block go dark before the lower ones.
+        const floorAlive = 1 - r / rows < ratio + 0.15;
         const lit = floorAlive && roll < litBase;
         const wx = x - w / 2 + pad + c * cw + (cw - ww) / 2;
         const wy = y - h + h * 0.06 + r * ch + (ch - wh) / 2;
@@ -355,14 +362,56 @@ function drawBuilding(
     }
   }
 
-  // Damage bar for the player's own buildings under fire.
+  // Damage bar, floated above where the roof used to be.
   if (!b.destroyed && ratio < 0.999 && s > 0.35) {
     const bw = w * 1.05;
+    const by = Math.min(y - h - 8 * s, y - fullH * 0.35);
     ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.fillRect(x - bw / 2, y - h - 8 * s, bw, 3.2 * s);
+    ctx.fillRect(x - bw / 2, by, bw, 3.2 * s);
     ctx.fillStyle = ratio > 0.5 ? '#69d97f' : ratio > 0.25 ? '#ffc341' : '#ff5a4d';
-    ctx.fillRect(x - bw / 2, y - h - 8 * s, bw * ratio, 3.2 * s);
+    ctx.fillRect(x - bw / 2, by, bw * ratio, 3.2 * s);
   }
+}
+
+/** Jagged concrete stump left where a warhead took the top off a tower. */
+function drawBrokenTop(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  top: number,
+  w: number,
+  s: number,
+  seed: number,
+  body: string,
+  night: number,
+): void {
+  const teeth = 5;
+  const bite = Math.max(1.5, 7 * s);
+  ctx.fillStyle = body;
+  ctx.beginPath();
+  ctx.moveTo(x - w / 2, top + bite);
+  for (let i = 0; i <= teeth; i++) {
+    const f = i / teeth;
+    const px = x - w / 2 + f * w;
+    const py = top + hash01(seed + i * 19) * bite * 1.6;
+    ctx.lineTo(px, py);
+  }
+  ctx.lineTo(x + w / 2, top + bite);
+  ctx.closePath();
+  ctx.fill();
+
+  // Exposed floor slabs and bent rebar.
+  ctx.strokeStyle = mix('#5b636e', '#2f3744', night);
+  ctx.lineWidth = Math.max(0.6, 1.1 * s);
+  for (let i = 0; i < 3; i++) {
+    const px = x - w * 0.3 + hash01(seed + i * 7) * w * 0.6;
+    const py = top + hash01(seed + i * 11) * bite;
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+    ctx.lineTo(px + (hash01(seed + i * 3) - 0.5) * 6 * s, py - 5 * s);
+    ctx.stroke();
+  }
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(x - w / 2, top + bite * 0.4, w, Math.max(0.8, 2 * s));
 }
 
 function drawRoof(

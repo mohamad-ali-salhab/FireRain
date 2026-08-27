@@ -18,6 +18,8 @@ export interface Building {
   collapse: number;
   /** Shake amount from a recent near miss. */
   shake: number;
+  /** Drives the smoke plume that a damaged building keeps putting out. */
+  smokeAcc: number;
   /** Deterministic per-building window seed. */
   seed: number;
 }

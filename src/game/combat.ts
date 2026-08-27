@@ -222,6 +222,53 @@ export function updateInterceptors(match: Match, dt: number): void {
 // Missile flight + impact
 // ---------------------------------------------------------------------------
 
+/**
+ * How much of a building is still standing, 0..1. A battered tower loses its
+ * upper floors, so the silhouette a missile can strike shrinks with the damage.
+ */
+export function standingFraction(b: Building): number {
+  const ratio = b.maxHp > 0 ? Math.max(0, b.hp / b.maxHp) : 0;
+  return 1 - (1 - ratio) * TOP_LOSS;
+}
+
+/** At zero hit points a building has lost this share of its height. */
+export const TOP_LOSS = 0.45;
+
+/**
+ * First building the segment from (ax,ay) to (bx,by) runs into, if any.
+ * Sampled rather than solved analytically — the fast tiers cover a lot of
+ * ground per frame and would otherwise tunnel straight through a tower.
+ */
+function sweepBuildings(
+  defender: SideState,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): { building: Building; x: number; y: number } | null {
+  const dist = Math.hypot(bx - ax, by - ay);
+  const steps = Math.max(2, Math.ceil(dist / 6));
+  const lo = Math.min(ax, bx) - 30;
+  const hi = Math.max(ax, bx) + 30;
+  const candidates = defender.buildings.filter((b) => !b.destroyed && b.x > lo && b.x < hi);
+  if (!candidates.length) return null;
+
+  for (let i = 1; i <= steps; i++) {
+    const f = i / steps;
+    const px = ax + (bx - ax) * f;
+    const py = ay + (by - ay) * f;
+    for (const b of candidates) {
+      const def = BUILDINGS[b.type];
+      const half = def.w / 2;
+      if (px < b.x - half || px > b.x + half) continue;
+      const top = WORLD.groundY - def.h * standingFraction(b);
+      if (py < top || py > WORLD.groundY) continue;
+      return { building: b, x: px, y: py };
+    }
+  }
+  return null;
+}
+
 export function updateMissiles(match: Match, dt: number): void {
   for (const m of match.missiles) {
     if (m.dead) continue;
@@ -237,31 +284,70 @@ export function updateMissiles(match: Match, dt: number): void {
     if (m.tier >= 3 && Math.random() < dt * 26) {
       match.particles.push(smoke(m.x, m.y, 4 + m.tier));
     }
+
+    // A warhead detonates on whatever it meets first — usually a tower's flank,
+    // not the street behind it.
+    const defender = m.side === 'player' ? match.enemy : match.player;
+    const struck = sweepBuildings(defender, prev.x, prev.y, now.x, now.y);
+    if (struck) {
+      m.dead = true;
+      m.x = struck.x;
+      m.y = struck.y;
+      impact(match, m, struck.x, struck.y, struck.building);
+      continue;
+    }
+
     if (m.t >= 1) {
       m.dead = true;
-      impact(match, m);
+      impact(match, m, m.tx, WORLD.groundY, null);
     }
   }
   match.missiles = match.missiles.filter((m) => !m.dead);
 }
 
-function impact(match: Match, m: Missile): void {
+/** Damaged buildings keep smoking, which is most of the "it took a hit" read. */
+export function updateBuildingSmoke(match: Match, dt: number): void {
+  for (const side of [match.player, match.enemy]) {
+    for (const b of side.buildings) {
+      if (b.destroyed) continue;
+      const ratio = b.maxHp > 0 ? b.hp / b.maxHp : 1;
+      if (ratio > 0.82) continue;
+      const def = BUILDINGS[b.type];
+      // The worse the damage, the thicker the plume.
+      b.smokeAcc += dt * (1 - ratio) * 5.5;
+      while (b.smokeAcc >= 1) {
+        b.smokeAcc -= 1;
+        const top = WORLD.groundY - def.h * standingFraction(b);
+        const p = smoke(b.x + (Math.random() - 0.5) * def.w * 0.8, top + Math.random() * 8, 5 + Math.random() * 7);
+        p.vy -= 14;
+        p.life *= 1.5;
+        p.maxLife *= 1.5;
+        match.particles.push(p);
+      }
+    }
+  }
+}
+
+function impact(match: Match, m: Missile, ix: number, iy: number, direct: Building | null): void {
   const defender = m.side === 'player' ? match.enemy : match.player;
   const attacker = m.side === 'player' ? match.player : match.enemy;
   attacker.stats.hits++;
 
   const power = 0.35 + m.tier * 0.3;
-  audio.explosion(power, panFor(match, m.tx));
-  explosionBurst(match, m.tx, WORLD.groundY, m.blast, m.tier);
+  audio.explosion(power, panFor(match, ix));
+  explosionBurst(match, ix, iy, m.blast, m.tier);
   match.shake = Math.max(match.shake, 5 + m.tier * 3.5);
 
   // Anti-air is a legitimate target now — a direct hit takes a battery out.
+  // A burst high up a tower barely troubles the guns at street level.
+  const height = Math.max(0, WORLD.groundY - iy);
+  const airburst = Math.max(0, 1 - height / Math.max(1, m.blast * 1.6));
   let batteriesKilled = 0;
   for (const bat of [...defender.batteries]) {
-    const dx = Math.max(0, Math.abs(bat.x - m.tx) - AA_HALF_WIDTH);
+    const dx = Math.max(0, Math.abs(bat.x - ix) - AA_HALF_WIDTH);
     if (dx > m.blast) continue;
     const falloff = dx <= 0 ? 1 : 1 - dx / m.blast;
-    bat.hp -= m.damage * (0.3 + 0.7 * falloff);
+    bat.hp -= m.damage * (0.15 + 0.85 * falloff * falloff) * airburst;
     bat.shake = Math.max(bat.shake, 0.4 + falloff * 0.5);
     if (bat.hp <= 0) {
       batteryWreck(match, bat);
@@ -276,10 +362,13 @@ function impact(match: Match, m: Missile): void {
     if (b.destroyed) continue;
     const def = BUILDINGS[b.type];
     const half = def.w / 2;
-    const dx = Math.max(0, Math.abs(b.x - m.tx) - half);
-    if (dx > m.blast) continue;
-    const falloff = dx <= 0 ? 1 : 1 - dx / m.blast;
-    const dmg = m.damage * (0.18 + 0.82 * falloff * falloff);
+    const dx = Math.max(0, Math.abs(b.x - ix) - half);
+    if (b !== direct && dx > m.blast) continue;
+    const falloff = b === direct ? 1 : dx <= 0 ? 1 : 1 - dx / m.blast;
+    // A neighbour is only splashed by a burst near its own height.
+    const reach = b === direct ? 1 : Math.max(0, 1 - Math.max(0, iy - WORLD.groundY + def.h) / Math.max(1, m.blast * 2));
+    const dmg = m.damage * (0.18 + 0.82 * falloff * falloff) * (b === direct ? 1 : reach);
+    if (dmg <= 0) continue;
     b.hp -= dmg;
     b.shake = Math.max(b.shake, 0.35 + falloff * 0.5);
     if (b.hp <= 0) {
@@ -293,7 +382,7 @@ function impact(match: Match, m: Missile): void {
     }
   }
   if (killed > 0) {
-    audio.collapse(panFor(match, m.tx));
+    audio.collapse(panFor(match, ix));
     match.shake = Math.max(match.shake, 9);
   }
 
@@ -304,8 +393,8 @@ function impact(match: Match, m: Missile): void {
         ? `-${killed} ${killed === 1 ? 'building' : 'buildings'}`
         : `${MISSILES[m.tier - 1].roman} hit`;
   match.texts.push({
-    x: m.tx,
-    y: WORLD.groundY - 60,
+    x: ix,
+    y: Math.min(WORLD.groundY - 40, iy - 24),
     text: label,
     color: killed > 0 || batteriesKilled > 0 ? '#ff6b5e' : '#ffd980',
     life: 1.6,

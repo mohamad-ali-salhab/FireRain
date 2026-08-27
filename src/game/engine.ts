@@ -2,7 +2,15 @@ import { MATCH, META, MISSILES, WORLD } from '../core/config';
 import type { MetaSave, SideState } from '../core/types';
 import { audio } from '../core/audio';
 import { noteIncomingTier, updateBot } from './bot';
-import { panFor, spawnMissile, updateDefences, updateInterceptors, updateMissiles, updateParticles } from './combat';
+import {
+  panFor,
+  spawnMissile,
+  updateBuildingSmoke,
+  updateDefences,
+  updateInterceptors,
+  updateMissiles,
+  updateParticles,
+} from './combat';
 import {
   cityValue,
   difficultyProfile,
@@ -56,6 +64,7 @@ export function stepMatch(match: Match, dt: number, meta: MetaSave): void {
   updateMissiles(match, dt);
   updateDefences(match, dt, meta);
   updateInterceptors(match, dt);
+  updateBuildingSmoke(match, dt);
   updateParticles(match, dt);
   updateBot(match, dt, meta);
 

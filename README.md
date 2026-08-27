@@ -75,6 +75,23 @@ launcher takes 40 seconds to reload.
 To attack: open **ICBM**, pick a tier, tap their city to pin each target (the cash comes
 out as you pin, and **Clear Pins** refunds it), then press **Fight**.
 
+## Hitting the city
+
+A warhead detonates on the first thing its flight path meets, which is usually the
+flank of a tower rather than the street behind it. Each frame the missile's movement is
+swept against the defender's standing buildings, so a tall block in the front row
+genuinely shields what is behind it — aiming past a skyline is a real problem now.
+
+A building that takes a hit loses its upper floors: the silhouette is shortened, the
+break is drawn as jagged concrete with bent rebar, the top floors go dark, and it keeps
+putting out a smoke plume that thickens as the damage does. **Income is unaffected** —
+a half-wrecked tower pays exactly what an intact one does, right up until it is
+destroyed. Only the plot going empty costs you anything.
+
+Because the silhouette shrinks with damage, a battered tower stops shielding its
+neighbours, so a second salvo into the same block reaches further than the first.
+A burst high up a tower also barely troubles the anti-air at street level.
+
 ## Why missiles get through
 
 Interception is physical, not a dice roll. A battery solves for where the incoming
@@ -96,8 +113,10 @@ against a fully stocked defence. That is the pressure the whole economy sits on.
 | `Z` | Un-pin the last target |
 | `Esc` | Cancel placement / close panel / pause |
 
-`__rof.speed = 8` in the browser console fast-forwards the clock — handy for checking the
-7-minute cap steps and the day/night cycle without waiting them out.
+In the browser console, `__rof.speed = 8` fast-forwards the clock (handy for the
+7-minute cap steps and the day/night cycle), `__rof.debugState()` dumps the live match,
+and `__rof.damageEnemy(0.3)` batters the other city so the damage rendering can be
+inspected without waiting for a bombardment.
 
 ## Layout
 
