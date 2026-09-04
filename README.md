@@ -1,6 +1,4 @@
-# Rain of Fire
-
-**Live: https://rain-of-fire.netlify.app**
+# Final Skyline
 
 A browser clone of the mobile missile-vs-city strategy game: build an economy, screen
 it with layered anti-air, and level the other side's skyline before the clock runs out.
@@ -113,9 +111,9 @@ against a fully stocked defence. That is the pressure the whole economy sits on.
 | `Z` | Un-pin the last target |
 | `Esc` | Cancel placement / close panel / pause |
 
-In the browser console, `__rof.speed = 8` fast-forwards the clock (handy for the
-7-minute cap steps and the day/night cycle), `__rof.debugState()` dumps the live match,
-and `__rof.damageEnemy(0.3)` batters the other city so the damage rendering can be
+In the browser console, `__finalSkyline.speed = 8` fast-forwards the clock (handy for the
+7-minute cap steps and the day/night cycle), `__finalSkyline.debugState()` dumps the live match,
+and `__finalSkyline.damageEnemy(0.3)` batters the other city so the damage rendering can be
 inspected without waiting for a bombardment.
 
 ## Layout
@@ -162,8 +160,8 @@ Caveats before you re-tune:
 
 ## Deploying to Netlify
 
-Deployed to the `rain-of-fire` project on Netlify — https://rain-of-fire.netlify.app.
-`netlify.toml` drives it (`npm run build` → `dist`, SPA redirect, Node 22).
+Deploy Final Skyline as a Netlify project. `netlify.toml` drives the build
+(`npm run build` → `dist`, SPA redirect, Node 22).
 
 To ship a change:
 

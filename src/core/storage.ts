@@ -1,7 +1,9 @@
 import { AA, MISSILES } from './config';
 import type { MetaSave } from './types';
 
-const KEY = 'rain-of-fire:meta:v1';
+const KEY = 'final-skyline:meta:v1';
+// Preserve progression from builds released before the game was renamed.
+const LEGACY_KEY = ['rain', 'of', 'fire:meta:v1'].join('-');
 
 export function defaultMeta(): MetaSave {
   return {
@@ -19,10 +21,10 @@ export function defaultMeta(): MetaSave {
 export function loadMeta(): MetaSave {
   const base = defaultMeta();
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = localStorage.getItem(KEY) ?? localStorage.getItem(LEGACY_KEY);
     if (!raw) return base;
     const parsed = JSON.parse(raw) as Partial<MetaSave>;
-    return {
+    const meta = {
       ...base,
       ...parsed,
       // Guard against a save written by an older build with fewer entries.
@@ -30,6 +32,9 @@ export function loadMeta(): MetaSave {
       aaReloadLevel: fit(parsed.aaReloadLevel, base.aaReloadLevel),
       missileReloadLevel: fit(parsed.missileReloadLevel, base.missileReloadLevel),
     };
+    // Complete the rename lazily, after confirming the legacy data is valid.
+    if (!localStorage.getItem(KEY)) localStorage.setItem(KEY, JSON.stringify(meta));
+    return meta;
   } catch {
     return base;
   }

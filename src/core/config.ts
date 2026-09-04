@@ -1,5 +1,5 @@
 /**
- * Rain of Fire — all tunable game data lives here.
+ * Final Skyline — all tunable game data lives here.
  * Distances are in "metres" which map 1:1 to world units.
  */
 

@@ -686,7 +686,7 @@ export class GameUI {
     const wrap = el('div');
     wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;width:min(760px,100%);margin:auto 0;';
 
-    wrap.appendChild(el('h1', undefined, 'Rain of Fire'));
+    wrap.appendChild(el('h1', undefined, 'Final Skyline'));
     const stars = el('div', 'starline', `${ICON_STAR}<span>${meta.stars}</span>`);
     wrap.appendChild(stars);
     wrap.appendChild(

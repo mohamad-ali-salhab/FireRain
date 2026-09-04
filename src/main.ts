@@ -292,7 +292,7 @@ let lastDockH = 0;
 let overSaved = false;
 
 /**
- * Debug handle for playtesting: `__rof.speed = 8` in the console fast-forwards
+ * Debug handle for playtesting: `__finalSkyline.speed = 8` in the console fast-forwards
  * the clock so the 7-minute build-limit steps and the day/night cycle can be
  * checked without waiting them out.
  */
@@ -345,7 +345,7 @@ const debug = {
     return MISSILES.map((d) => ({ tier: d.roman, cost: d.cost, speed: d.speed, dmg: d.damage, reload: d.reload }));
   },
 };
-(window as unknown as { __rof: typeof debug }).__rof = debug;
+(window as unknown as { __finalSkyline: typeof debug }).__finalSkyline = debug;
 
 function frame(now: number): void {
   const dt = Math.min(0.05, (now - last) / 1000) * Math.max(0.1, Math.min(20, debug.speed));
