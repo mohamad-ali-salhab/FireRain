@@ -30,6 +30,7 @@ let uidCounter = 1;
 export const nextUid = (): number => uidCounter++;
 
 export interface Match {
+  mode: 'bot' | 'online';
   phase: Phase;
   difficulty: Difficulty;
   /** Seconds elapsed since the match started. */
@@ -79,16 +80,37 @@ function citySlots(side: Side, layer: 0 | 1): { x: number }[] {
   const zone = side === 'player' ? WORLD.cityRight : WORLD.cityLeft;
   const width = zone.x1 - zone.x0;
   const step = width / SLOTS_PER_LAYER;
-  const offset = layer === 0 ? step * 0.5 : 0;
+  const inset = layer === 0 ? step * 0.5 : 0;
   const out: { x: number }[] = [];
   for (let i = 0; i < SLOTS_PER_LAYER; i++) {
-    out.push({ x: zone.x0 + offset + (i / (SLOTS_PER_LAYER - 1)) * (width - offset) });
+    out.push({ x: zone.x0 + inset + (i / (SLOTS_PER_LAYER - 1)) * (width - inset * 2) });
   }
   return out;
 }
 
-function layerFor(type: number): 0 | 1 {
+export function buildingLayer(type: number): 0 | 1 {
   return type >= 4 ? 0 : 1;
+}
+
+export interface BuildingPlacement {
+  x: number;
+  layer: 0 | 1;
+  clears: Building | null;
+}
+
+/** Snap a pointer position to the nearest usable plot for this building type. */
+export function buildingPlacementAt(state: SideState, type: number, x: number): BuildingPlacement | null {
+  const zone = state.side === 'player' ? WORLD.cityRight : WORLD.cityLeft;
+  if (x < zone.x0 || x > zone.x1) return null;
+  const layer = buildingLayer(type);
+  const slot = citySlots(state.side, layer).reduce((best, candidate) =>
+    Math.abs(candidate.x - x) < Math.abs(best.x - x) ? candidate : best,
+  );
+  const occupant = state.buildings.find(
+    (building) => building.layer === layer && Math.round(building.x) === Math.round(slot.x),
+  );
+  if (occupant && !occupant.destroyed) return null;
+  return { x: slot.x, layer, clears: occupant ?? null };
 }
 
 /**
@@ -97,7 +119,7 @@ function layerFor(type: number): 0 | 1 {
  * within a layer the position is genuinely random.
  */
 function pickSlot(state: SideState, type: number): { x: number; layer: 0 | 1; clears: Building | null } {
-  const layer = layerFor(type);
+  const layer = buildingLayer(type);
   const slots = citySlots(state.side, layer);
   const occupied = new Map<number, Building>();
   for (const b of state.buildings) {
@@ -155,6 +177,7 @@ function makeSide(side: Side, name: string): SideState {
 export function createMatch(difficulty: Difficulty, durationSeconds: number): Match {
   const botName = BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)];
   return {
+    mode: 'bot',
     phase: 'playing',
     difficulty,
     time: 0,
@@ -174,6 +197,17 @@ export function createMatch(difficulty: Difficulty, durationSeconds: number): Ma
     peaceAnnounced: false,
     lastLimitStep: 0,
   };
+}
+
+/** Creates the mirrored local view used by both players in an online match. */
+export function createOnlineMatch(opponentName: string, durationSeconds: number, elapsedSeconds = 0): Match {
+  const match = createMatch('medium', durationSeconds);
+  match.mode = 'online';
+  match.enemy.name = opponentName;
+  match.time = Math.max(0, Math.min(durationSeconds - 0.1, elapsedSeconds));
+  match.incomeAcc = match.time % MATCH.incomeIntervalSeconds;
+  match.lastLimitStep = limitSteps(match);
+  return match;
 }
 
 // ---------------------------------------------------------------------------
@@ -244,13 +278,14 @@ export function countBuildings(state: SideState, type: number): number {
   return n;
 }
 
-export function buyBuilding(match: Match, state: SideState, type: number): boolean {
+export function buyBuilding(match: Match, state: SideState, type: number, x?: number): boolean {
   const def = BUILDINGS[type];
   if (countBuildings(state, type) >= buildingLimit(match, type)) return false;
   if (state.money < def.cost) return false;
+  const slot = x === undefined ? pickSlot(state, type) : buildingPlacementAt(state, type, x);
+  if (!slot) return false;
   state.money -= def.cost;
   state.stats.spent += def.cost;
-  const slot = pickSlot(state, type);
   if (slot.clears) state.buildings.splice(state.buildings.indexOf(slot.clears), 1);
   const b: Building = {
     uid: nextUid(),

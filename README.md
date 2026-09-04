@@ -5,7 +5,8 @@ it with layered anti-air, and level the other side's skyline before the clock ru
 
 Plain TypeScript + Canvas on Vite. No game engine, no image or audio assets — every
 building, turret, missile and explosion is drawn procedurally and every sound is
-synthesised with the WebAudio API, so the whole game ships as one ~25 kB gzipped bundle.
+synthesised with the WebAudio API. Supabase provides optional accounts, matchmaking,
+persistent progression, and the realtime command stream for online matches.
 
 ```bash
 npm install
@@ -33,8 +34,8 @@ Win or lose you earn **stars**, which buy permanent upgrades in the main-menu St
 ## The five systems
 
 **Buildings** — nine tiers, `$2`–`$60`. Bigger ones pay more per tick and take far more
-punishment, but each type has a cap. Each one goes up on a **random free plot** in your
-land; short types take the front row and tall ones the back purely so the skyline never
+punishment, but each type has a cap. Pick a building and **tap its plot yourself**;
+short types take the front row and tall ones the back purely so the skyline never
 hides itself. A levelled building frees its plot and its slot in the cap, so you can
 always rebuild — and rebuilding under fire is the main drain on a losing side's economy.
 
@@ -126,6 +127,8 @@ src/game/    state.ts    match state, purchases, targeting queue
              combat.ts   ballistics, interception, damage, particles
              bot.ts      easy / medium / hard opponents
              engine.ts   the tick: income, launch queues, win conditions
+src/online/  service.ts  Supabase auth, profiles, queue, event subscription
+             actions.ts  validated and mirrored online game commands
 src/render/  camera.ts   pan/zoom and world↔screen transforms
              scene.ts    everything drawn on the canvas
 src/ui/      icons.ts    procedural SVG icons
@@ -133,19 +136,48 @@ src/ui/      icons.ts    procedural SVG icons
 tools/player.ts          the scripted stand-in for a competent human
 tools/sim.ts             headless balance harness (win rates)
 tools/probe.ts           one instrumented match, sampled every 30 s
+tools/online-sim.ts      mirror/validation check for online commands
 ```
 
 Tuning the game means editing `src/core/config.ts` and re-running `npm run sim`.
 
+## Online play
+
+Accounts use Supabase email/password authentication. A profile row tied to the Auth user
+stores the public username, wins, losses, stars, and permanent upgrade levels. Queueing
+matches players who choose the same 5-, 10-, or 15-minute duration. During a match each
+browser simulates its own right-side city while authenticated realtime commands are
+mirrored onto the opponent's left side. Online games use an equal base loadout; Star Shop
+bonuses remain part of solo progression.
+
+To run online features locally:
+
+```bash
+cp .env.example .env.local
+npx supabase start
+npx supabase db reset
+npm run dev
+```
+
+Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` in Vercel for Production,
+Preview, and Development. These are browser-safe project identifiers; never expose the
+secret or service-role key. Without them the full bot game still works and the online
+card clearly reports that its backend is not connected.
+
+The migration in `supabase/migrations/` creates the account profile, queue, matches,
+results, RLS policies, RPC functions, and Realtime publication. It also exposes the
+locked-down `api` schema to PostgREST; only the explicitly granted matchmaking/result
+functions are callable by authenticated players.
+
 ## Balance snapshot
 
-Against the scripted player in `tools/sim.ts`, 14 matches per batch, 15-minute matches:
+Against the scripted player in `tools/sim.ts`, 10 recent 15-minute matches per level:
 
 | Difficulty | Player win rate |
 | --- | --- |
 | Easy | 100 % every batch |
-| Medium | 70–95 % across batches |
-| Hard | 60–90 % across batches |
+| Medium | 80 % |
+| Hard | 30 % |
 
 Caveats before you re-tune:
 
@@ -158,24 +190,18 @@ Caveats before you re-tune:
   batteries, magazines, shots fired and intercepted for both sides. That is far more use
   for finding *why* a side collapses than the win-rate table.
 
-## Deploying to Netlify
+## Deploying to Vercel
 
-Deploy Final Skyline as a Netlify project. `netlify.toml` drives the build
-(`npm run build` → `dist`, SPA redirect, Node 22).
+The production project deploys from `main`. Use `npm run build` with `dist` as the output
+directory and Node 22. Add both public Supabase variables before enabling online play.
 
-To ship a change:
+Pushing a commit to `main` starts a production deployment through the Git integration.
 
-```bash
-npx netlify-cli deploy --prod      # after `netlify login` and `netlify link`
-```
+## Current limitations
 
-The project is **not** wired to the GitHub repo yet, so pushing a commit does not
-redeploy on its own. To get continuous deploys, connect the repo under
-Project configuration → Build & deploy → Link repository in the Netlify dashboard.
-
-## Not built yet
-
-- Multiplayer — the bots are stand-ins for real opponents.
+- Online simulation is client-authoritative beta networking. RLS prevents one player
+  from entering another match, but a future competitive/ranked mode should move economy
+  and result authority to a trusted server.
 - Per-launcher ammunition: rounds are a per-type pool shared by both batteries of a tier.
 - Moving or selling a battery once it is sited.
 - Taming the medium/hard overlap described above.

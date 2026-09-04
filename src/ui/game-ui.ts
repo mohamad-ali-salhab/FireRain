@@ -10,6 +10,8 @@ import {
 } from '../core/config';
 import type { MetaSave, PanelId } from '../core/types';
 import { audio } from '../core/audio';
+import type { OnlineAction } from '../online/actions';
+import type { OnlineState } from '../online/service';
 import {
   aaCost,
   aaRadius,
@@ -18,7 +20,6 @@ import {
   buyAaRadius,
   buyAaReload,
   buyAmmo,
-  buyBuilding,
   buyMissileUpgrade,
   cityValue,
   clearQueue,
@@ -60,8 +61,8 @@ export interface UiState {
   difficulty: Difficulty;
   /** Infinity for an unlimited match. */
   duration: number;
-  /** Anti-air type awaiting a tap on your own land, or null. */
-  placing: number | null;
+  /** Item awaiting a tap on the player's land, or null. */
+  placing: { kind: 'building' | 'battery'; type: number } | null;
   /** World x under the cursor while placing. */
   placeX: number | null;
 }
@@ -70,8 +71,17 @@ export interface UiHost {
   ui: UiState;
   meta: MetaSave;
   match: Match | null;
+  online: OnlineState;
+  matchMeta(): MetaSave;
   setPanel(panel: PanelId): void;
   startMatch(): void;
+  findOnlineMatch(): Promise<void>;
+  cancelOnlineQueue(): Promise<void>;
+  signUp(username: string, email: string, password: string): Promise<void>;
+  signIn(email: string, password: string): Promise<void>;
+  signOut(): Promise<void>;
+  sendOnlineAction(action: OnlineAction): void;
+  saveProgress(): void;
   quitToMenu(): void;
   setPaused(paused: boolean): void;
   toggleZoom(): void;
@@ -146,6 +156,11 @@ export class GameUI {
     const pause = el('button', 'iconbtn', ICON_PAUSE);
     pause.title = 'Pause';
     pause.addEventListener('click', () => {
+      if (this.host.match?.mode === 'online') {
+        audio.deny();
+        this.toast('Online matches cannot be paused');
+        return;
+      }
       audio.click();
       this.host.setPaused(true);
     });
@@ -230,6 +245,11 @@ export class GameUI {
     this.toastTimer = window.setTimeout(() => this.toastEl.classList.remove('show'), 1500);
   }
 
+  /** Rebuilds the current overlay after account or queue state changes. */
+  refreshOverlay(): void {
+    this.overlayKind = 'none';
+  }
+
   // ------------------------------------------------------------ per frame
 
   sync(): void {
@@ -292,6 +312,7 @@ export class GameUI {
       chips.push(`<div class="chip war">WEAPONS FREE</div>`);
     }
     chips.push(`<div class="chip income">INCOME <b>+${money(incomePerTick(match.player))}</b> / 2s</div>`);
+    if (match.mode === 'online') chips.push('<div class="chip"><b>ONLINE</b> · equal base loadout</div>');
     const next = secondsToNextLimit(match);
     if (isFinite(next)) chips.push(`<div class="chip">BUILD LIMIT +1 in <b>${clock(next)}</b></div>`);
     else chips.push(`<div class="chip">BUILD LIMIT MAXED</div>`);
@@ -314,9 +335,14 @@ export class GameUI {
 
     if (ui.placing !== null) {
       this.hintEl.style.display = '';
-      const def = AA[ui.placing];
-      const price = aaCost(match.player, ui.placing);
-      this.hintEl.innerHTML = `Tap anywhere on <b>your land</b> to site the ${def.interceptsTier === 0 ? 'radar' : `${def.name} ${def.roman}`} (<b>$${price}</b>). Tap its card again to cancel.`;
+      if (ui.placing.kind === 'building') {
+        const def = BUILDINGS[ui.placing.type];
+        this.hintEl.innerHTML = `Tap a free plot on <b>your land</b> to build ${def.name} (<b>$${def.cost}</b>). Tap its card again to cancel.`;
+      } else {
+        const def = AA[ui.placing.type];
+        const price = aaCost(match.player, ui.placing.type);
+        this.hintEl.innerHTML = `Tap anywhere on <b>your land</b> to site the ${def.interceptsTier === 0 ? 'radar' : `${def.name} ${def.roman}`} (<b>$${price}</b>). Tap its card again to cancel.`;
+      }
       return;
     }
 
@@ -347,6 +373,7 @@ export class GameUI {
       return;
     }
     const n = commitQueue(match.player);
+    if (n > 0) this.host.sendOnlineAction({ type: 'commit-targets' });
     audio.buy();
     this.toast(`${n} ${n === 1 ? 'missile' : 'missiles'} away`);
   }
@@ -471,16 +498,27 @@ export class GameUI {
         onClick: () => {
           const match = this.host.match;
           if (!match) return;
+          const ui = this.host.ui;
+          if (ui.placing?.kind === 'building' && ui.placing.type === def.id) {
+            ui.placing = null;
+            ui.placeX = null;
+            audio.click();
+            return;
+          }
           if (countBuildings(match.player, def.id) >= buildingLimit(match, def.id)) {
             audio.deny();
             this.toast('Build limit reached — wait for the next unlock');
             return;
           }
-          if (buyBuilding(match, match.player, def.id)) audio.build();
-          else {
+          if (match.player.money < def.cost) {
             audio.deny();
             this.toast('Not enough cash');
+            return;
           }
+          ui.placing = { kind: 'building', type: def.id };
+          ui.placeX = null;
+          audio.click();
+          this.toast('Tap your land to place it');
         },
         update: ({ root, count }) => {
           const match = this.host.match;
@@ -489,6 +527,10 @@ export class GameUI {
           const built = countBuildings(match.player, def.id);
           count.textContent = `${built}/${limit}`;
           root.classList.toggle('dim', built >= limit || match.player.money < def.cost);
+          root.classList.toggle(
+            'sel',
+            this.host.ui.placing?.kind === 'building' && this.host.ui.placing.type === def.id,
+          );
         },
       });
     }
@@ -508,8 +550,9 @@ export class GameUI {
           const match = this.host.match;
           if (!match) return;
           const ui = this.host.ui;
-          if (ui.placing === def.id) {
+          if (ui.placing?.kind === 'battery' && ui.placing.type === def.id) {
             ui.placing = null;
+            ui.placeX = null;
             audio.click();
             return;
           }
@@ -524,7 +567,8 @@ export class GameUI {
             this.toast('Not enough cash');
             return;
           }
-          ui.placing = def.id;
+          ui.placing = { kind: 'battery', type: def.id };
+          ui.placeX = null;
           ui.showRings = true;
           this.ringsBtn.classList.add('on');
           audio.click();
@@ -538,7 +582,10 @@ export class GameUI {
           const price = aaCost(match.player, def.id);
           cost.textContent = !isFinite(price) ? 'MAX' : price === 0 ? 'Free +1' : `$${price}`;
           root.classList.toggle('dim', !isFinite(price) || match.player.money < price);
-          root.classList.toggle('sel', this.host.ui.placing === def.id);
+          root.classList.toggle(
+            'sel',
+            this.host.ui.placing?.kind === 'battery' && this.host.ui.placing.type === def.id,
+          );
         },
       });
     }
@@ -574,7 +621,10 @@ export class GameUI {
             return;
           }
           const n = buyAmmo(match.player, def.id, this.host.ui.ammoMult);
-          if (n > 0) audio.buy();
+          if (n > 0) {
+            audio.buy();
+            this.host.sendOnlineAction({ type: 'buy-ammo', batteryType: def.id, count: n });
+          }
           else {
             audio.deny();
             this.toast(match.player.ammo[def.id] >= def.ammoCap ? 'Magazine full' : 'Not enough cash');
@@ -602,6 +652,7 @@ export class GameUI {
         return;
       }
       clearQueue(match.player);
+      this.host.sendOnlineAction({ type: 'clear-targets' });
       audio.click();
       this.toast('Targets cleared, cash refunded');
     });
@@ -757,6 +808,8 @@ export class GameUI {
     actions.append(play, shop);
     wrap.appendChild(actions);
 
+    wrap.appendChild(this.buildOnlineCard());
+
     const record = el(
       'p',
       'sub',
@@ -769,7 +822,7 @@ export class GameUI {
     help.style.cssText = 'max-width:620px;color:#aab4c0;font-size:13px;line-height:1.6;margin-top:6px;';
     help.innerHTML = `<summary style="cursor:pointer;font-weight:800;color:#dfe6ee;padding:6px 0">How it works</summary>
       <ul style="padding-left:18px;margin:6px 0">
-        <li><b>Buildings</b> pay income every 2 seconds and go up on a random free plot. Each type has a cap that rises by one every ${MATCH.limitStepSeconds / 60} minutes; a levelled building frees its slot so you can rebuild.</li>
+        <li><b>Buildings</b> pay income every 2 seconds. Pick a type, then tap a free plot on your land to place it. Each type has a cap that rises by one every ${MATCH.limitStepSeconds / 60} minutes; a levelled building frees its slot so you can rebuild.</li>
         <li><b>Anti-air</b> comes in five tiers plus a radar. A tier ${'Ⅰ'}–${'Ⅴ'} battery only stops the matching missile tier — max two of each. Pick a system, then tap your own land to site it wherever you like. Batteries can be bombed, and replaced once they are.</li>
         <li><b>ABM rounds</b> are the ammunition. An empty battery cannot intercept anything.</li>
         <li><b>Upgrades</b> (in-match, paid in cash) widen defence radius, cut anti-air reload, and unlock heavier missiles.</li>
@@ -779,6 +832,94 @@ export class GameUI {
     wrap.appendChild(help);
 
     this.overlay.appendChild(wrap);
+  }
+
+  private buildOnlineCard(): HTMLElement {
+    const state = this.host.online;
+    const card = el('section', 'online-card');
+    const title = el('div', 'online-title', '<span>Online Match</span><span class="online-beta">BETA</span>');
+    card.appendChild(title);
+
+    if (!state.configured || state.phase === 'disabled') {
+      card.appendChild(el('p', 'online-message', state.message));
+      return card;
+    }
+
+    if (!state.username) {
+      const fields = el('div', 'auth-fields');
+      const username = el('input', 'auth-input');
+      username.placeholder = 'Username (for sign up)';
+      username.autocomplete = 'username';
+      username.maxLength = 20;
+      const email = el('input', 'auth-input');
+      email.type = 'email';
+      email.placeholder = 'Email';
+      email.autocomplete = 'email';
+      const password = el('input', 'auth-input');
+      password.type = 'password';
+      password.placeholder = 'Password';
+      password.autocomplete = 'current-password';
+      fields.append(username, email, password);
+      card.appendChild(fields);
+
+      const row = el('div', 'online-actions');
+      const signUp = el('button', 'btn primary', 'Create account');
+      const signIn = el('button', 'btn ghost', 'Sign in');
+      const busy = state.phase === 'loading';
+      signUp.disabled = busy;
+      signIn.disabled = busy;
+      const submit = (action: () => Promise<void>) => {
+        audio.init();
+        audio.click();
+        void action();
+      };
+      signUp.addEventListener('click', () => submit(() => this.host.signUp(username.value, email.value, password.value)));
+      signIn.addEventListener('click', () => submit(() => this.host.signIn(email.value, password.value)));
+      password.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') submit(() => this.host.signIn(email.value, password.value));
+      });
+      row.append(signUp, signIn);
+      card.appendChild(row);
+    } else {
+      const profile = el('div', 'online-profile');
+      const name = el('strong');
+      name.textContent = state.username;
+      const record = el('span');
+      record.textContent = `${state.wins}W / ${state.losses}L · ${state.stars} stars`;
+      profile.append(name, record);
+      card.appendChild(profile);
+
+      const row = el('div', 'online-actions');
+      if (state.phase === 'queueing') {
+        const cancel = el('button', 'btn ghost', 'Cancel search');
+        cancel.addEventListener('click', () => {
+          audio.click();
+          void this.host.cancelOnlineQueue();
+        });
+        row.appendChild(cancel);
+      } else {
+        const duration = [300, 600, 900].includes(this.host.ui.duration) ? this.host.ui.duration : 600;
+        const queue = el('button', 'btn primary', `Queue · ${duration / 60} min`);
+        queue.disabled = state.phase === 'loading';
+        queue.addEventListener('click', () => {
+          audio.init();
+          audio.click();
+          void this.host.findOnlineMatch();
+        });
+        const signOut = el('button', 'btn ghost', 'Sign out');
+        signOut.addEventListener('click', () => {
+          audio.click();
+          void this.host.signOut();
+        });
+        row.append(queue, signOut);
+      }
+      card.appendChild(row);
+    }
+
+    const message = el('p', `online-message${state.phase === 'error' ? ' error' : ''}`);
+    message.textContent = state.message;
+    card.appendChild(message);
+    return card;
   }
 
   private buildShop(meta: MetaSave): void {
@@ -851,6 +992,7 @@ export class GameUI {
         meta.stars -= cost;
         buy();
         audio.buy();
+        this.host.saveProgress();
         refresh();
       });
       update();
@@ -963,10 +1105,11 @@ export class GameUI {
     wrap.appendChild(grid);
 
     const row = el('div', 'row center');
-    const again = el('button', 'btn primary', 'Play again');
+    const again = el('button', 'btn primary', match.mode === 'online' ? 'Back to online' : 'Play again');
     again.addEventListener('click', () => {
       audio.click();
-      this.host.startMatch();
+      if (match.mode === 'online') this.host.quitToMenu();
+      else this.host.startMatch();
     });
     const shop = el('button', 'btn', 'Star Shop');
     shop.addEventListener('click', () => {
@@ -984,7 +1127,7 @@ export class GameUI {
   }
 
   private buildUpgrades(match: Match): void {
-    const meta = this.host.meta;
+    const meta = this.host.matchMeta();
     const wrap = el('div');
     wrap.style.cssText = 'width:min(1080px,100%);margin:auto 0;';
 
@@ -1059,7 +1202,11 @@ export class GameUI {
           () => `$${match.player.aaRadiusPrice[def.id]}`,
           `+${def.radiusStep}m`,
           () => match.player.money >= match.player.aaRadiusPrice[def.id],
-          () => buyAaRadius(match.player, def.id),
+          () => {
+            const bought = buyAaRadius(match.player, def.id);
+            if (bought) this.host.sendOnlineAction({ type: 'aa-radius', batteryType: def.id });
+            return bought;
+          },
           `${def.interceptsTier === 0 ? 'Radar' : def.name} coverage`,
         ),
       ),
@@ -1076,7 +1223,11 @@ export class GameUI {
           () => `$${match.player.aaReloadPrice[def.id]}`,
           `-${def.reloadStep}s`,
           () => match.player.money >= match.player.aaReloadPrice[def.id],
-          () => buyAaReload(match.player, def.id, meta),
+          () => {
+            const bought = buyAaReload(match.player, def.id, meta);
+            if (bought) this.host.sendOnlineAction({ type: 'aa-reload', batteryType: def.id });
+            return bought;
+          },
           `${def.name} rate of fire`,
         ),
       ),
@@ -1097,7 +1248,11 @@ export class GameUI {
           () =>
             match.player.money >=
             (match.player.missileUnlocked[i] ? match.player.missileReloadPrice[i] : def.unlockCost),
-          () => buyMissileUpgrade(match.player, def.tier, meta) !== false,
+          () => {
+            const bought = buyMissileUpgrade(match.player, def.tier, meta) !== false;
+            if (bought) this.host.sendOnlineAction({ type: 'missile-upgrade', tier: def.tier });
+            return bought;
+          },
           `${def.name} — ${def.damage} damage, ${def.speed} m/s`,
         );
       }),

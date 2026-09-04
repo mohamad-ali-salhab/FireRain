@@ -17,6 +17,8 @@ export interface SceneOpts {
   hasRadar: boolean;
   /** Anti-air type being sited by hand, with the cursor position and validity. */
   deploy: { type: number; x: number | null; valid: boolean; radius: number } | null;
+  /** Building being positioned on a snapped city plot. */
+  buildingDeploy: { type: number; x: number; layer: 0 | 1; valid: boolean } | null;
 }
 
 const SKY_DAY = ['#3c4147', '#6d757e', '#b9bfc6', '#d6dade'];
@@ -56,6 +58,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, match: Match, cam: Came
   drawParticles(ctx, cam, match);
   drawPins(ctx, cam, match, opts);
   if (opts.deploy) drawDeployPreview(ctx, cam, opts.deploy);
+  if (opts.buildingDeploy) drawBuildingDeployPreview(ctx, cam, opts.buildingDeploy, night);
   drawTexts(ctx, cam, match);
 
   ctx.restore();
@@ -618,6 +621,44 @@ function drawDeployPreview(
   ctx.moveTo(x, gy - 10 * cam.scale);
   ctx.lineTo(x, gy - 44 * cam.scale);
   ctx.stroke();
+  ctx.restore();
+}
+
+/** Translucent building and footprint while the player chooses a plot. */
+function drawBuildingDeployPreview(
+  ctx: CanvasRenderingContext2D,
+  cam: Camera,
+  deploy: { type: number; x: number; layer: 0 | 1; valid: boolean },
+  night: number,
+): void {
+  const def = BUILDINGS[deploy.type];
+  const color = deploy.valid ? '#59e07a' : '#ff5a4d';
+  const preview: Building = {
+    uid: -1,
+    type: deploy.type,
+    side: 'player',
+    x: deploy.x,
+    layer: deploy.layer,
+    hp: def.hp,
+    maxHp: def.hp,
+    destroyed: false,
+    collapse: 0,
+    shake: 0,
+    smokeAcc: 0,
+    seed: 17,
+  };
+
+  ctx.save();
+  ctx.globalAlpha = deploy.valid ? 0.62 : 0.35;
+  drawBuilding(ctx, cam, preview, night, false);
+  ctx.globalAlpha = 0.95;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(1.5, 2 * cam.scale);
+  ctx.setLineDash([6, 4]);
+  const x = cam.toScreenX(deploy.x);
+  const gy = cam.groundScreenY();
+  ctx.strokeRect(x - (def.w * cam.scale) / 2, gy - def.h * cam.scale, def.w * cam.scale, def.h * cam.scale);
+  ctx.setLineDash([]);
   ctx.restore();
 }
 

@@ -18,9 +18,6 @@ import {
   type Match,
 } from './state';
 
-/** Seconds between a bot's salvos. */
-const BOT_SALVO_GAP = 3;
-
 /** Most of the purse that may go to guns and rockets; the rest rebuilds. */
 const MAX_WAR_SHARE = 0.68;
 
@@ -42,6 +39,7 @@ export function updateBot(match: Match, dt: number, meta: MetaSave): void {
   match.botSalvoAcc += dt;
   if (match.botThinkAcc < p.thinkInterval) return;
   match.botThinkAcc = 0;
+  if (Math.random() > p.decisionChance) return;
 
   // Split the purse up front. Rebuilding under fire is a bottomless money pit,
   // so economy gets an envelope like everything else instead of first refusal.
@@ -97,7 +95,7 @@ function defence(match: Match, p: BotProfile, meta: MetaSave, envelope: number):
 
   // The two free systems are always worth taking.
   for (const type of [0, 1]) {
-    while (bot.aaOwned[type] < AA_MAX_PER_TYPE && aaCost(bot, type) === 0) {
+    while (bot.aaOwned[type] < p.freeDefenceLimit && bot.aaOwned[type] < AA_MAX_PER_TYPE && aaCost(bot, type) === 0) {
       if (!buyBattery(bot, type)) break;
     }
   }
@@ -155,8 +153,10 @@ function offence(match: Match, p: BotProfile, meta: MetaSave, envelope: number):
   if (inPeace(match)) return;
   if (match.time < MATCH.peaceSeconds + p.firstStrikeDelay) return;
 
-  // Always keep the cheap launchers busy, even when the purse is thin.
-  let budget = Math.max(envelope, Math.min(bot.money, MISSILES[0].cost * p.salvoMax));
+  // Respect the profile's offence envelope. Previously this forced every bot,
+  // including Easy, to keep its cheap launcher permanently busy.
+  let budget = Math.min(bot.money, envelope);
+  if (budget < MISSILES[0].cost) return;
 
   // Climb the tier ladder when it can comfortably afford it.
   for (let tier = 2; tier <= p.maxTier; tier++) {
@@ -178,7 +178,7 @@ function offence(match: Match, p: BotProfile, meta: MetaSave, envelope: number):
 
   // Salvo pacing. The gap is short and salvoMax is the real throughput dial —
   // a long gap just left most of the launchers sitting reloaded and idle.
-  if (match.botSalvoAcc < BOT_SALVO_GAP) return;
+  if (match.botSalvoAcc < p.salvoGap) return;
   if (bot.pending.length > p.salvoMax * 2) return;
   match.botSalvoAcc = 0;
 

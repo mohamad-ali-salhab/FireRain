@@ -1,16 +1,18 @@
 import './style.css';
 import { AA, MATCH, MISSILES, WORLD } from './core/config';
 import { audio } from './core/audio';
-import { loadMeta, saveMeta } from './core/storage';
+import { defaultMeta, loadMeta, saveMeta } from './core/storage';
 import type { PanelId } from './core/types';
 import { stepMatch } from './game/engine';
 import {
   aaRadius,
+  buildingPlacementAt,
   buyAaRadius,
   buyBattery,
   buyBuilding,
   canDeployAt,
   createMatch,
+  createOnlineMatch,
   deployZone,
   hasRadar,
   pinTarget,
@@ -18,6 +20,8 @@ import {
   unpinLast,
   type Match,
 } from './game/state';
+import { applyRemoteAction, type OnlineAction } from './online/actions';
+import { initialOnlineState, OnlineService, type OnlineMatchTicket } from './online/service';
 import { Camera } from './render/camera';
 import { drawScene } from './render/scene';
 import { GameUI, type UiHost, type UiState } from './ui/game-ui';
@@ -27,7 +31,9 @@ const ctx = canvas.getContext('2d', { alpha: false })!;
 const uiRoot = document.getElementById('ui') as HTMLElement;
 
 const meta = loadMeta();
+let onlineMatchMeta = defaultMeta();
 audio.setMuted(meta.muted);
+const online = initialOnlineState();
 
 const ui: UiState = {
   panel: 'none',
@@ -47,11 +53,32 @@ const camera = new Camera();
 const HOME_VIEW_X = WORLD.cityRight.x0 + 400;
 const ENEMY_VIEW_X = WORLD.cityLeft.x1 - 400;
 
+let gameUI: GameUI;
+let onlineService: OnlineService;
+let onlineResultReported = false;
+
+function enterMatch(match: Match): void {
+  host.match = match;
+  host.screen = 'game';
+  ui.panel = 'none';
+  ui.selectedTier = 1;
+  ui.aimX = null;
+  ui.placing = null;
+  ui.placeX = null;
+  onlineResultReported = false;
+  camera.setMode('city');
+  camera.snapTo(HOME_VIEW_X);
+}
+
 const host: UiHost = {
   ui,
   meta,
+  online,
   match: null,
   screen: 'menu',
+  matchMeta() {
+    return host.match?.mode === 'online' ? onlineMatchMeta : meta;
+  },
   setPanel(panel: PanelId) {
     ui.panel = panel;
     ui.placing = null;
@@ -68,17 +95,42 @@ const host: UiHost = {
     }
   },
   startMatch() {
-    host.match = createMatch(ui.difficulty, ui.duration);
-    host.screen = 'game';
-    ui.panel = 'none';
-    ui.selectedTier = 1;
-    ui.aimX = null;
-    ui.placing = null;
-    ui.placeX = null;
-    camera.setMode('city');
-    camera.snapTo(HOME_VIEW_X);
+    enterMatch(createMatch(ui.difficulty, ui.duration));
+  },
+  async findOnlineMatch() {
+    await onlineService.joinQueue(ui.duration);
+  },
+  async cancelOnlineQueue() {
+    await onlineService.cancelQueue();
+  },
+  async signUp(username: string, email: string, password: string) {
+    await onlineService.signUp(username, email, password);
+  },
+  async signIn(email: string, password: string) {
+    await onlineService.signIn(email, password);
+  },
+  async signOut() {
+    await onlineService.signOut();
+  },
+  sendOnlineAction(action: OnlineAction) {
+    if (host.match?.mode === 'online') void onlineService.sendAction(action);
+  },
+  saveProgress() {
+    saveMeta(meta);
+    void onlineService.syncProgress(meta);
   },
   quitToMenu() {
+    if (host.match?.mode === 'online') {
+      if (host.match.phase !== 'over' && !onlineResultReported) {
+        onlineResultReported = true;
+        meta.losses++;
+        meta.stars += 1;
+        saveMeta(meta);
+        void onlineService.reportResult(false, 1);
+      } else {
+        void onlineService.disconnectMatch();
+      }
+    }
     host.match = null;
     host.screen = 'menu';
     ui.panel = 'none';
@@ -86,7 +138,7 @@ const host: UiHost = {
   },
   setPaused(paused: boolean) {
     const m = host.match;
-    if (!m || m.phase === 'over') return;
+    if (!m || m.phase === 'over' || m.mode === 'online') return;
     m.phase = paused ? 'paused' : 'playing';
   },
   toggleZoom() {
@@ -106,10 +158,30 @@ const host: UiHost = {
   closeShop() {
     host.screen = host.match && host.match.phase !== 'over' ? 'game' : 'menu';
     saveMeta(meta);
+    void onlineService.syncProgress(meta);
   },
 };
 
-const gameUI = new GameUI(uiRoot, host);
+gameUI = new GameUI(uiRoot, host);
+onlineService = new OnlineService(online, meta, {
+  changed() {
+    saveMeta(meta);
+    gameUI.refreshOverlay();
+  },
+  matched(ticket: OnlineMatchTicket) {
+    onlineMatchMeta = defaultMeta();
+    const elapsed = Math.max(0, (Date.now() - Date.parse(ticket.startedAt)) / 1000);
+    enterMatch(createOnlineMatch(ticket.opponentUsername, ticket.durationSeconds, elapsed));
+  },
+  action(action) {
+    const match = host.match;
+    if (!match || match.mode !== 'online' || match.phase !== 'playing') return;
+    if (!applyRemoteAction(match, onlineMatchMeta, action)) {
+      console.warn('Ignored out-of-sync online action', action);
+    }
+  },
+});
+void onlineService.init();
 
 // ---------------------------------------------------------------------------
 // Canvas sizing
@@ -209,22 +281,42 @@ function handleTap(clientX: number): void {
   if (placing() && ui.placing !== null) {
     const worldX = camera.toWorldX(clientX);
     ui.placeX = worldX;
-    const type = ui.placing;
-    if (!canDeployAt(match.player, worldX)) {
-      audio.deny();
-      const zone = deployZone('player');
-      gameUI.toast(
-        worldX < zone.x0 || worldX > zone.x1 ? 'That is not your land' : 'Too close to another battery',
-      );
-      return;
-    }
-    if (buyBattery(match.player, type, worldX)) {
-      audio.build();
-      ui.placing = null;
-      ui.placeX = null;
+    const placement = ui.placing;
+    if (placement.kind === 'building') {
+      const slot = buildingPlacementAt(match.player, placement.type, worldX);
+      if (!slot) {
+        audio.deny();
+        gameUI.toast('Choose a free plot on your land');
+        return;
+      }
+      if (buyBuilding(match, match.player, placement.type, slot.x)) {
+        host.sendOnlineAction({ type: 'build-building', buildingType: placement.type, x: slot.x });
+        audio.build();
+        ui.placing = null;
+        ui.placeX = null;
+      } else {
+        audio.deny();
+        gameUI.toast('Not enough cash or build limit reached');
+      }
     } else {
-      audio.deny();
-      gameUI.toast('Not enough cash');
+      const type = placement.type;
+      if (!canDeployAt(match.player, worldX)) {
+        audio.deny();
+        const zone = deployZone('player');
+        gameUI.toast(
+          worldX < zone.x0 || worldX > zone.x1 ? 'That is not your land' : 'Too close to another battery',
+        );
+        return;
+      }
+      if (buyBattery(match.player, type, worldX)) {
+        host.sendOnlineAction({ type: 'build-battery', batteryType: type, x: worldX });
+        audio.build();
+        ui.placing = null;
+        ui.placeX = null;
+      } else {
+        audio.deny();
+        gameUI.toast('Not enough cash');
+      }
     }
     return;
   }
@@ -233,6 +325,7 @@ function handleTap(clientX: number): void {
   const worldX = clampTargetX(camera.toWorldX(clientX));
   const shot = pinTarget(match.player, ui.selectedTier, worldX);
   if (shot) {
+    host.sendOnlineAction({ type: 'pin-target', tier: ui.selectedTier, x: shot.x });
     audio.pin();
     return;
   }
@@ -272,7 +365,10 @@ window.addEventListener('keydown', (e) => {
     (uiRoot.querySelector('.fightbtn') as HTMLButtonElement | null)?.click();
   }
   if ((e.key === 'z' || e.key === 'Z') && ui.panel === 'icbm') {
-    if (unpinLast(match.player)) audio.click();
+    if (unpinLast(match.player)) {
+      host.sendOnlineAction({ type: 'unpin-target' });
+      audio.click();
+    }
   }
   if (e.key >= '1' && e.key <= '6' && ui.panel === 'icbm') {
     const tier = Number(e.key);
@@ -352,11 +448,22 @@ function frame(now: number): void {
   last = now;
 
   const match = host.match;
-  if (match && host.screen === 'game' && match.phase === 'playing') stepMatch(match, dt, meta);
+  if (match && host.screen === 'game' && match.phase === 'playing') stepMatch(match, dt, host.matchMeta());
   if (match?.result) {
     if (!overSaved) {
       overSaved = true;
-      saveMeta(meta);
+      if (match.mode === 'online') {
+        if (!onlineResultReported) {
+          onlineResultReported = true;
+          meta.stars += match.result.stars;
+          if (match.result.won) meta.wins++;
+          else meta.losses++;
+          saveMeta(meta);
+          void onlineService.reportResult(match.result.won, match.result.stars);
+        }
+      } else {
+        host.saveProgress();
+      }
     }
   } else {
     overSaved = false;
@@ -378,16 +485,28 @@ function frame(now: number): void {
     aiming: ui.panel === 'icbm',
     aimTier: ui.selectedTier,
     aimX: ui.panel === 'icbm' ? ui.aimX : null,
-    meta,
+    meta: host.matchMeta(),
     hasRadar: match ? hasRadar(match.player) : true,
     deploy:
-      match && ui.placing !== null
+      match && ui.placing?.kind === 'battery'
         ? {
-            type: ui.placing,
+            type: ui.placing.type,
             x: ui.placeX,
             valid: ui.placeX !== null && canDeployAt(match.player, ui.placeX),
-            radius: aaRadius(match.player, ui.placing, meta),
+            radius: aaRadius(match.player, ui.placing.type, host.matchMeta()),
           }
+        : null,
+    buildingDeploy:
+      match && ui.placing?.kind === 'building' && ui.placeX !== null
+        ? (() => {
+            const slot = buildingPlacementAt(match.player, ui.placing.type, ui.placeX!);
+            return {
+              type: ui.placing.type,
+              x: slot?.x ?? ui.placeX!,
+              layer: slot?.layer ?? 1,
+              valid: slot !== null,
+            };
+          })()
         : null,
   });
   ctx.restore();

@@ -207,6 +207,8 @@ export interface BotProfile {
   incomeMult: number;
   /** Seconds between bot decisions. */
   thinkInterval: number;
+  /** Chance a decision tick is used instead of being fumbled. */
+  decisionChance: number;
   /** Share of spare cash the bot is willing to sink into defence. */
   defenceBudget: number;
   /** Share of spare cash spent on offence once the peace ends. */
@@ -214,6 +216,8 @@ export interface BotProfile {
   /** How many missiles it fires per salvo. */
   salvoMin: number;
   salvoMax: number;
+  /** Minimum seconds between salvos. */
+  salvoGap: number;
   /** Aiming error in world units — lower is deadlier. */
   aimError: number;
   /** 0..1 — probability it picks your most valuable building as a target. */
@@ -224,53 +228,64 @@ export interface BotProfile {
   firstStrikeDelay: number;
   /** How eagerly it stocks interceptors (rounds it aims to keep per battery). */
   ammoTarget: number;
+  /** Maximum number of each free opening defence it claims. */
+  freeDefenceLimit: number;
 }
 
 export const BOTS: Record<Difficulty, BotProfile> = {
   easy: {
     label: 'Easy',
     blurb: 'Builds slowly, forgets to reload, aims badly.',
-    incomeMult: 0.8,
-    thinkInterval: 3.2,
-    defenceBudget: 0.25,
-    offenceBudget: 0.35,
+    incomeMult: 0.65,
+    thinkInterval: 4.5,
+    decisionChance: 0.58,
+    defenceBudget: 0.12,
+    offenceBudget: 0.16,
     salvoMin: 1,
-    salvoMax: 2,
-    aimError: 95,
-    smartTargeting: 0.1,
-    maxTier: 2,
-    firstStrikeDelay: 35,
-    ammoTarget: 5,
+    salvoMax: 1,
+    salvoGap: 14,
+    aimError: 175,
+    smartTargeting: 0,
+    maxTier: 1,
+    firstStrikeDelay: 70,
+    ammoTarget: 2,
+    freeDefenceLimit: 1,
   },
   medium: {
     label: 'Medium',
     blurb: 'Balanced economy, keeps a real air defence up.',
     incomeMult: 1.0,
     thinkInterval: 1.8,
+    decisionChance: 0.9,
     defenceBudget: 0.38,
     offenceBudget: 0.48,
     salvoMin: 2,
     salvoMax: 5,
+    salvoGap: 6,
     aimError: 34,
     smartTargeting: 0.5,
     maxTier: 5,
     firstStrikeDelay: 10,
     ammoTarget: 18,
+    freeDefenceLimit: 2,
   },
   hard: {
     label: 'Hard',
     blurb: 'Rushes economy, layered defence, hunts your best towers.',
     incomeMult: 1.3,
     thinkInterval: 0.9,
+    decisionChance: 1,
     defenceBudget: 0.42,
     offenceBudget: 0.7,
     salvoMin: 5,
     salvoMax: 12,
+    salvoGap: 3,
     aimError: 12,
     smartTargeting: 0.9,
     maxTier: 6,
     firstStrikeDelay: 2,
     ammoTarget: 32,
+    freeDefenceLimit: 2,
   },
 };
 

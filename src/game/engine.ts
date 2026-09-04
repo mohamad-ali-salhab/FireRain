@@ -31,7 +31,7 @@ export function stepMatch(match: Match, dt: number, meta: MetaSave): void {
   while (match.incomeAcc >= MATCH.incomeIntervalSeconds) {
     match.incomeAcc -= MATCH.incomeIntervalSeconds;
     payIncome(match.player, 1);
-    payIncome(match.enemy, botIncomeMult(match));
+    payIncome(match.enemy, match.mode === 'online' ? 1 : botIncomeMult(match));
   }
 
   // --- building cap milestones ------------------------------------------
@@ -66,7 +66,7 @@ export function stepMatch(match: Match, dt: number, meta: MetaSave): void {
   updateInterceptors(match, dt);
   updateBuildingSmoke(match, dt);
   updateParticles(match, dt);
-  updateBot(match, dt, meta);
+  if (match.mode === 'bot') updateBot(match, dt, meta);
 
   for (const side of [match.player, match.enemy]) {
     for (const b of side.buildings) {
