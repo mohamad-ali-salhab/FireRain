@@ -37,9 +37,6 @@ export function updateBot(match: Match, dt: number, meta: MetaSave): void {
   const p = difficultyProfile(match);
   match.botThinkAcc += dt;
   match.botSalvoAcc += dt;
-  if (match.botThinkAcc < p.thinkInterval) return;
-  match.botThinkAcc = 0;
-  if (Math.random() > p.decisionChance) return;
 
   // Split the purse up front. Rebuilding under fire is a bottomless money pit,
   // so economy gets an envelope like everything else instead of first refusal.
@@ -57,46 +54,49 @@ export function updateBot(match: Match, dt: number, meta: MetaSave): void {
   }
   const ecoShare = 1 - defShare - offShare;
 
-  economy(match, purse * (atWar ? ecoShare : 1));
-  defence(match, p, meta, purse * defShare);
-  offence(match, p, meta, purse * offShare);
+  // Launch decisions have their own clock, independent of fumbled build turns.
+  // Buy rounds first so construction and upgrades cannot starve an attack.
+  if (atWar && match.botSalvoAcc >= p.salvoGap) {
+    match.botSalvoAcc = 0;
+    offence(match, p, meta, Math.max(MISSILES[0].cost, purse * offShare));
+  }
+  if (match.botThinkAcc < p.thinkInterval) return;
+  match.botThinkAcc = 0;
+  if (Math.random() > p.decisionChance) return;
+  const built = economy(match, Math.min(match.enemy.money, purse * (atWar ? ecoShare : 1)));
+  defence(match, p, meta, Math.min(match.enemy.money, purse * defShare), !built);
 }
 
 // ---------------------------------------------------------------------------
 
-function economy(match: Match, budget: number): void {
+function economy(match: Match, budget: number): boolean {
   const bot = match.enemy;
-  let spendable = budget;
 
-  // Greedy: repeatedly take the affordable building with the best income per dollar,
+  // Take one affordable building with the best income per dollar,
   // with a mild bias towards the biggest thing it can afford.
-  for (let guard = 0; guard < 12; guard++) {
-    let bestType = -1;
-    let bestScore = -Infinity;
-    for (let t = 0; t < BUILDINGS.length; t++) {
-      const def = BUILDINGS[t];
-      if (def.cost > spendable) continue;
-      if (countBuildings(bot, t) >= buildingLimit(match, t)) continue;
-      const score = (def.income / def.cost) * (1 + t * 0.06);
-      if (score > bestScore) {
-        bestScore = score;
-        bestType = t;
-      }
+  let bestType = -1;
+  let bestScore = -Infinity;
+  for (let t = 0; t < BUILDINGS.length; t++) {
+    const def = BUILDINGS[t];
+    if (def.cost > budget) continue;
+    if (countBuildings(bot, t) >= buildingLimit(match, t)) continue;
+    const score = (def.income / def.cost) * (1 + t * 0.06);
+    if (score > bestScore) {
+      bestScore = score;
+      bestType = t;
     }
-    if (bestType < 0) break;
-    if (!buyBuilding(match, bot, bestType)) break;
-    spendable -= BUILDINGS[bestType].cost;
   }
+  return bestType >= 0 && buyBuilding(match, bot, bestType);
 }
 
-function defence(match: Match, p: BotProfile, meta: MetaSave, envelope: number): void {
+function defence(match: Match, p: BotProfile, meta: MetaSave, envelope: number, canBuild: boolean): void {
   const bot = match.enemy;
   let budget = envelope;
 
   // The two free systems are always worth taking.
   for (const type of [0, 1]) {
-    while (bot.aaOwned[type] < p.freeDefenceLimit && bot.aaOwned[type] < AA_MAX_PER_TYPE && aaCost(bot, type) === 0) {
-      if (!buyBattery(bot, type)) break;
+    if (canBuild && bot.aaOwned[type] < p.freeDefenceLimit && bot.aaOwned[type] < AA_MAX_PER_TYPE && aaCost(bot, type) === 0) {
+      if (buyBattery(bot, type)) canBuild = false;
     }
   }
 
@@ -113,12 +113,13 @@ function defence(match: Match, p: BotProfile, meta: MetaSave, envelope: number):
     const type = tier; // AA index N intercepts tier N
     // Build the layer out to full strength as soon as it is affordable. Waiting
     // for proof that a tier is in play means the first salvo lands unopposed.
-    while (bot.aaOwned[type] < AA_MAX_PER_TYPE) {
+    while (canBuild && bot.aaOwned[type] < AA_MAX_PER_TYPE) {
       const cost = aaCost(bot, type);
       if (!isFinite(cost) || cost > budget) break;
       const spot = bestDeploySpot(bot, type, aaRadius(bot, type, meta));
       if (spot === null || !buyBattery(bot, type, spot)) break;
       budget -= cost;
+      canBuild = false;
     }
     // Stock interceptors for whatever is already deployed. Magazines have to be
     // full *before* the ceasefire lifts — an empty battery is just scenery.
@@ -139,10 +140,12 @@ function defence(match: Match, p: BotProfile, meta: MetaSave, envelope: number):
     for (const type of [0, 1, 2, 3, 4, 5]) {
       if (bot.aaOwned[type] === 0) continue;
       if (bot.aaRadiusPrice[type] <= budget && Math.random() < 0.5) {
-        if (buyAaRadius(bot, type)) budget -= bot.aaRadiusPrice[type];
+        const cost = bot.aaRadiusPrice[type];
+        if (buyAaRadius(bot, type)) budget -= cost;
       }
       if (type > 0 && bot.aaReloadPrice[type] <= budget && Math.random() < 0.4) {
-        if (buyAaReload(bot, type, meta)) budget -= bot.aaReloadPrice[type];
+        const cost = bot.aaReloadPrice[type];
+        if (buyAaReload(bot, type, meta)) budget -= cost;
       }
     }
   }
@@ -158,7 +161,20 @@ function offence(match: Match, p: BotProfile, meta: MetaSave, envelope: number):
   let budget = Math.min(bot.money, envelope);
   if (budget < MISSILES[0].cost) return;
 
-  // Climb the tier ladder when it can comfortably afford it.
+  if (bot.pending.length > p.salvoMax * 2) return;
+
+  const rounds = p.salvoMin + Math.floor(Math.random() * (p.salvoMax - p.salvoMin + 1));
+  for (let i = 0; i < rounds; i++) {
+    const tier = chooseAttackTier(match, p, budget);
+    if (tier === 0) break;
+    const def = MISSILES[tier - 1];
+    bot.money -= def.cost;
+    bot.stats.spent += def.cost;
+    budget -= def.cost;
+    bot.pending.push({ uid: nextUid(), tier, x: chooseTarget(match, p), cost: def.cost });
+  }
+
+  // Only spend the remaining attack budget on upgrades.
   for (let tier = 2; tier <= p.maxTier; tier++) {
     const def = MISSILES[tier - 1];
     if (bot.missileUnlocked[tier - 1]) continue;
@@ -172,33 +188,11 @@ function offence(match: Match, p: BotProfile, meta: MetaSave, envelope: number):
   if (Math.random() < 0.35) {
     const best = bestTier(bot, p);
     if (best > 0 && bot.missileReloadPrice[best - 1] <= budget * 0.4) {
-      if (buyMissileUpgrade(bot, best, meta) === 'reload') budget -= bot.missileReloadPrice[best - 1];
+      const cost = bot.missileReloadPrice[best - 1];
+      if (buyMissileUpgrade(bot, best, meta) === 'reload') budget -= cost;
     }
   }
 
-  // Salvo pacing. The gap is short and salvoMax is the real throughput dial —
-  // a long gap just left most of the launchers sitting reloaded and idle.
-  if (match.botSalvoAcc < p.salvoGap) return;
-  if (bot.pending.length > p.salvoMax * 2) return;
-  match.botSalvoAcc = 0;
-
-  // Every tier has its own launcher, so a salvo spreads across all of them —
-  // firing one tier at a time left most of the arsenal reloading for nothing.
-  const rounds = p.salvoMin + Math.floor(Math.random() * (p.salvoMax - p.salvoMin + 1));
-  for (let i = 0; i < rounds; i++) {
-    const tier = chooseAttackTier(match, p, budget);
-    if (tier === 0) break;
-    const def = MISSILES[tier - 1];
-    if (bot.money < def.cost) break;
-    if (def.perMatchLimit > 0) {
-      const committed = bot.pending.filter((q) => q.tier === tier).length;
-      if (bot.shotsUsed[tier - 1] + committed >= def.perMatchLimit) continue;
-    }
-    bot.money -= def.cost;
-    bot.stats.spent += def.cost;
-    budget -= def.cost;
-    bot.pending.push({ uid: nextUid(), tier, x: chooseTarget(match, p), cost: def.cost });
-  }
 }
 
 function bestTier(state: Match['enemy'], p: BotProfile): number {
@@ -216,11 +210,12 @@ function chooseAttackTier(match: Match, p: BotProfile, budget: number): number {
     const def = MISSILES[tier - 1];
     if (!bot.missileUnlocked[tier - 1]) continue;
     if (def.cost > budget) continue;
-    if (def.perMatchLimit > 0 && bot.shotsUsed[tier - 1] >= def.perMatchLimit) continue;
+    const waiting = bot.pending.filter((q) => q.tier === tier).length;
+    if (def.perMatchLimit > 0 && bot.shotsUsed[tier - 1] + waiting >= def.perMatchLimit) continue;
     // Damage per dollar, boosted when the player has no way to stop this tier.
     let score = def.damage / def.cost;
     // Prefer a launcher that is not already stacked with waiting rounds.
-    score /= 1 + bot.pending.filter((q) => q.tier === tier).length * 0.8;
+    score /= 1 + waiting * 0.8;
     const defended = player.aaOwned[tier] > 0 && player.ammo[tier] > 0;
     if (!defended && !def.unstoppable) score *= 1 + p.smartTargeting * 1.6;
     if (def.unstoppable) score *= 1.4;

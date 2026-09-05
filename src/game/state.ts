@@ -319,11 +319,12 @@ const AA_DEPLOY_MARGIN = 150;
 
 export function canDeployAt(state: SideState, x: number): boolean {
   const zone = deployZone(state.side);
-  if (x < zone.x0 || x > zone.x1) return false;
+  if (!Number.isFinite(x) || x < zone.x0 || x > zone.x1) return false;
   return state.batteries.every((b) => Math.abs(b.x - x) >= AA_MIN_SPACING);
 }
 
-export const AA_MIN_SPACING = 34;
+// Rendered systems are scaled 1.4x; leave clearance for the chassis and turret.
+export const AA_MIN_SPACING = 56;
 
 /** Places a battery at x. Pass no x for a random spot in the side's own land. */
 export function buyBattery(state: SideState, type: number, x?: number): boolean {

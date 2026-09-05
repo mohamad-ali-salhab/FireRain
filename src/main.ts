@@ -24,7 +24,7 @@ import { applyRemoteAction, type OnlineAction } from './online/actions';
 import { initialOnlineState, OnlineService, type OnlineMatchTicket } from './online/service';
 import { Camera } from './render/camera';
 import { drawScene } from './render/scene';
-import { GameUI, type UiHost, type UiState } from './ui/game-ui';
+import { GameUI, PANEL_KEYS, type UiHost, type UiState } from './ui/game-ui';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d', { alpha: false })!;
@@ -274,13 +274,18 @@ canvas.addEventListener(
 );
 
 function handleTap(clientX: number): void {
+  handleWorldAction(camera.toWorldX(clientX));
+}
+
+function handleWorldAction(worldX: number): void {
   const match = host.match;
   if (!match) return;
 
   // Siting a new anti-air battery on your own land.
   if (placing() && ui.placing !== null) {
-    const worldX = camera.toWorldX(clientX);
     ui.placeX = worldX;
+    const zone = ui.placing.kind === 'building' ? WORLD.cityRight : deployZone('player');
+    buildCursor = Math.max(zone.x0, Math.min(zone.x1, worldX));
     const placement = ui.placing;
     if (placement.kind === 'building') {
       const slot = buildingPlacementAt(match.player, placement.type, worldX);
@@ -322,8 +327,7 @@ function handleTap(clientX: number): void {
   }
 
   if (!aimable()) return;
-  const worldX = clampTargetX(camera.toWorldX(clientX));
-  const shot = pinTarget(match.player, ui.selectedTier, worldX);
+  const shot = pinTarget(match.player, ui.selectedTier, clampTargetX(worldX));
   if (shot) {
     host.sendOnlineAction({ type: 'pin-target', tier: ui.selectedTier, x: shot.x });
     audio.pin();
@@ -345,9 +349,37 @@ function handleTap(clientX: number): void {
 // Keyboard shortcuts
 // ---------------------------------------------------------------------------
 
+let buildCursor = WORLD.cityRight.x0 + 15;
+
+function focusCursor(x: number): void {
+  camera.focus(x);
+  camera.manual = true;
+}
+
+function prepareCursor(): void {
+  if (ui.placing) {
+    ui.placeX ??= buildCursor;
+    focusCursor(ui.placeX);
+    // Enter now places the selected item instead of re-clicking its card.
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  }
+}
+
+uiRoot.addEventListener('click', prepareCursor);
+
 window.addEventListener('keydown', (e) => {
+  const target = e.target;
+  if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey ||
+    (target instanceof HTMLElement && (target.isContentEditable || target.closest('input, textarea, select')))) return;
+  const key = e.key.toLowerCase();
+  if (e.repeat && !key.startsWith('arrow')) {
+    // Never spend cash or launch repeatedly because a key is held down.
+    if (key !== 'tab') e.preventDefault();
+    return;
+  }
   const match = host.match;
-  if (e.key === 'Escape') {
+  if (key === 'escape') {
+    e.preventDefault();
     if (ui.placing !== null) {
       ui.placing = null;
       ui.placeX = null;
@@ -359,21 +391,72 @@ window.addEventListener('keydown', (e) => {
     else if (match && match.phase === 'paused') host.setPaused(false);
     return;
   }
-  if (!match || match.phase !== 'playing') return;
-  if (e.key === ' ' && ui.panel === 'icbm') {
+  audio.init();
+  if (gameUI.handleKey(e)) {
     e.preventDefault();
-    (uiRoot.querySelector('.fightbtn') as HTMLButtonElement | null)?.click();
+    prepareCursor();
+    return;
   }
-  if ((e.key === 'z' || e.key === 'Z') && ui.panel === 'icbm') {
+  if (host.screen !== 'game' || !match || match.phase !== 'playing') return;
+  // Upgrades are a keyboard-navigable modal; battlefield actions stay blocked.
+  if (ui.panel === 'upgrades') return;
+  if (key === 'enter' && document.activeElement?.matches('button, summary')) return;
+  const panel = (Object.entries(PANEL_KEYS) as [PanelId, string][]).find(([, value]) => value === key)?.[0];
+  if (panel) {
+    e.preventDefault();
+    host.setPanel(panel);
+    if (panel === 'icbm') {
+      ui.aimX = ENEMY_VIEW_X;
+      focusCursor(ui.aimX);
+    }
+    return;
+  }
+  if (key === 't') {
+    e.preventDefault();
+    if (ui.panel !== 'icbm') host.setPanel('icbm');
+    ui.aimX ??= ENEMY_VIEW_X;
+    focusCursor(ui.aimX);
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    return;
+  }
+  if (key.startsWith('arrow')) {
+    e.preventDefault();
+    const direction = key === 'arrowleft' || key === 'arrowdown' ? -1 : 1;
+    const step = e.shiftKey ? 2 : (key === 'arrowup' || key === 'arrowdown') ? 150 : 30;
+    if (ui.placing) {
+      const zone = ui.placing.kind === 'building' ? WORLD.cityRight : deployZone('player');
+      buildCursor = Math.max(zone.x0, Math.min(zone.x1, (ui.placeX ?? buildCursor) + direction * step));
+      ui.placeX = buildCursor;
+      focusCursor(buildCursor);
+    } else if (aimable()) {
+      ui.aimX = clampTargetX((ui.aimX ?? ENEMY_VIEW_X) + direction * step);
+      focusCursor(ui.aimX);
+    } else {
+      camera.panBy(-direction * step * camera.scale);
+    }
+    return;
+  }
+  if (key === '+' || key === '=' || key === '-') {
+    e.preventDefault();
+    camera.zoomBy(key === '-' ? 1.12 : 1 / 1.12);
+    return;
+  }
+  if (key === 'enter' && (placing() || aimable())) {
+    e.preventDefault();
+    handleWorldAction(ui.placing ? (ui.placeX ?? buildCursor) : (ui.aimX ?? ENEMY_VIEW_X));
+    return;
+  }
+  if (key === ' ' || key === 'f') {
+    e.preventDefault();
+    if (ui.panel !== 'icbm') host.setPanel('icbm');
+    gameUI.sync();
+    (uiRoot.querySelector('.fightbtn') as HTMLButtonElement | null)?.click();
+    return;
+  }
+  if (key === 'z' && ui.panel === 'icbm') {
+    e.preventDefault();
     if (unpinLast(match.player)) {
       host.sendOnlineAction({ type: 'unpin-target' });
-      audio.click();
-    }
-  }
-  if (e.key >= '1' && e.key <= '6' && ui.panel === 'icbm') {
-    const tier = Number(e.key);
-    if (match.player.missileUnlocked[tier - 1]) {
-      ui.selectedTier = tier;
       audio.click();
     }
   }
@@ -402,6 +485,16 @@ const debug = {
       time: Math.round(m.time),
       duration: m.duration,
       money: Math.round(m.player.money),
+      phase: m.phase,
+      panel: ui.panel,
+      selectedTier: ui.selectedTier,
+      placing: ui.placing,
+      placeX: ui.placeX,
+      aimX: ui.aimX,
+      queued: m.player.queued.length,
+      pending: m.player.pending.length,
+      launched: m.player.stats.launched,
+      enemyLaunched: m.enemy.stats.launched,
       buildingXs: m.player.buildings.filter((b) => !b.destroyed).map((b) => Math.round(b.x)),
       batteries: m.player.batteries.length,
       batteryXs: m.player.batteries.map((b) => Math.round(b.x)),

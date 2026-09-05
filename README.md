@@ -14,7 +14,43 @@ npm run dev        # http://localhost:5173
 npm run build      # typecheck + production bundle into dist/
 npm run preview    # serve the production bundle
 npm run sim -- 10  # headless balance runs, 10 matches per difficulty
+npm run test:game  # deterministic gameplay regression checks
 ```
+
+## Keyboard controls
+
+Every menu and the Star Shop supports **Tab / Shift+Tab** to move focus and **Enter**
+to activate. In the main menu, **1–3** select difficulty, **5–8** select match length,
+**Enter** starts, and **S** opens the Star Shop. Shortcut badges appear next to controls.
+Press **H** or use **Key hints** in the menu, match dock, or pause screen to hide/show
+them. This preference is saved on the device; shortcuts keep working while hidden.
+
+| Key | Action |
+| --- | --- |
+| B / A / R / U / I | Buildings / anti-air / ammunition / upgrades / missiles |
+| 1–9 | Select the numbered item in the current panel (missiles use 1–6) |
+| T | Enter ICBM targeting and focus the target cursor |
+| Left / Right | Move the selected placement or target cursor; pan when nothing is selected |
+| Up / Down | Move right / left in larger jumps |
+| Shift + arrows | Move precisely in 2-metre steps |
+| Enter | Place the selected building/system or pin a missile target |
+| F / Space | Commit pinned targets to their launchers; ceasefire still applies |
+| Z / C | Undo the last pin / clear all uncommitted pins (refunds cash) |
+| X | Cycle ammunition purchase quantity: 1 / 5 / 10 |
+| P / Esc | Pause or resume / cancel placement, close a panel, or pause |
+| V / + / − | Toggle battlefield view / zoom in / zoom out |
+| G / M / H | Defence coverage / mute / keyboard hints |
+
+In **Upgrades**, press **R** for the radius row, **D** for defence reload, or **M**
+for missiles, then **1–6** to buy the indicated upgrade. The selected row is outlined.
+Hold arrows to move continuously; holding a purchase key never repeats purchases.
+Typing in account fields does not trigger game shortcuts.
+
+Bots construct at most one building or defence system per decision, rather than
+buying whole batches. Their attack timer runs independently of construction decisions:
+after the two-minute ceasefire, Easy starts after 10 seconds with an 8-second salvo
+gap, Medium after 4 seconds with a 5-second gap, and Hard after 2 seconds with a
+3-second gap. Cash, launcher cooldowns, and queued rounds still limit actual launches.
 
 ## How a match plays
 
@@ -69,17 +105,19 @@ only reload one battery per tier at a time.
 Speed climbs steeply with tier — 255 m/s at tier I against 900 m/s at tier V — so the
 top of the ladder gives the defence far less time to solve an intercept. Tier VI is the
 **Bunker Buster**: $80 a shot, 1500 damage, and nothing can intercept it, but its
-launcher takes 40 seconds to reload.
+launcher takes 5 seconds to reload. Unlocking it costs $600; reload upgrades start
+at $300 for a 0.1-second reduction and grow with each purchase.
 
 To attack: open **ICBM**, pick a tier, tap their city to pin each target (the cash comes
 out as you pin, and **Clear Pins** refunds it), then press **Fight**.
 
 ## Hitting the city
 
-A warhead detonates on the first thing its flight path meets, which is usually the
-flank of a tower rather than the street behind it. Each frame the missile's movement is
-swept against the defender's standing buildings, so a tall block in the front row
-genuinely shields what is behind it — aiming past a skyline is a real problem now.
+Missiles launch straight up, turn across the top of the battlefield above the tallest
+skyline, and then dive vertically onto the **exact horizontal position you marked**.
+Intermediate towers cannot take the hit intended for a building farther back. A pin
+inside a building's footprint hits its remaining roof; a pin on empty land reaches
+the ground. Collision checks follow each flight leg even when a frame takes longer.
 
 A building that takes a hit loses its upper floors: the silhouette is shortened, the
 break is drawn as jagged concrete with bent rebar, the top floors go dark, and it keeps
@@ -87,9 +125,9 @@ putting out a smoke plume that thickens as the damage does. **Income is unaffect
 a half-wrecked tower pays exactly what an intact one does, right up until it is
 destroyed. Only the plot going empty costs you anything.
 
-Because the silhouette shrinks with damage, a battered tower stops shielding its
-neighbours, so a second salvo into the same block reaches further than the first.
-A burst high up a tower also barely troubles the anti-air at street level.
+Because the silhouette shrinks with damage, repeated hits on the same footprint
+detonate lower down the tower. A burst high up a tower barely troubles the anti-air
+at street level.
 
 ## Why missiles get through
 

@@ -15,17 +15,52 @@ import { aaRadius, aaReload, hash01, launchPadX, nextUid, removeBattery, type Ma
 // Ballistics
 // ---------------------------------------------------------------------------
 
-/** Peak height of the flight arc for a given ground distance. */
-function arcHeight(dist: number): number {
-  return Math.min(430, 110 + dist * 0.15);
+// Even the curved turns stay above the tallest possible skyline.
+const CRUISE_Y = Math.min(100, WORLD.groundY - Math.max(...BUILDINGS.map((b) => b.h)) - 140);
+
+/** Vertical launch, two rounded turns with a high crossing, then a vertical dive. */
+function missileRoute(m: Pick<Missile, 'x0' | 'y0' | 'tx' | 'ty'>) {
+  const distance = Math.abs(m.tx - m.x0);
+  const direction = Math.sign(m.tx - m.x0);
+  const bend = Math.min(100, distance / 2);
+  const rise = m.y0 - CRUISE_Y - bend;
+  const turn = Math.PI * bend / 2;
+  const crossing = distance - bend * 2;
+  const fall = m.ty - CRUISE_Y - bend;
+  const length = rise + turn * 2 + crossing + fall;
+  return { direction, bend, rise, turn, crossing, length };
+}
+
+function missileOnRoute(m: Missile, t: number, route: ReturnType<typeof missileRoute>): { x: number; y: number } {
+  if (t <= 0) return { x: m.x0, y: m.y0 };
+  if (t >= 1) return { x: m.tx, y: m.ty };
+  const { direction, bend, rise, turn, crossing, length } = route;
+  let distance = t * length;
+  if (distance <= rise) return { x: m.x0, y: m.y0 - distance };
+  distance -= rise;
+  if (distance < turn) {
+    const angle = distance / bend;
+    return {
+      x: m.x0 + direction * bend * (1 - Math.cos(angle)),
+      y: CRUISE_Y + bend * (1 - Math.sin(angle)),
+    };
+  }
+  distance -= turn;
+  if (distance <= crossing) return { x: m.x0 + direction * (bend + distance), y: CRUISE_Y };
+  distance -= crossing;
+  if (distance < turn) {
+    const angle = distance / bend;
+    return {
+      x: m.tx - direction * bend * (1 - Math.sin(angle)),
+      y: CRUISE_Y + bend * (1 - Math.cos(angle)),
+    };
+  }
+  distance -= turn;
+  return { x: m.tx, y: CRUISE_Y + bend + distance };
 }
 
 export function missileAt(m: Missile, t: number): { x: number; y: number } {
-  const c = Math.max(0, Math.min(1, t));
-  const x = m.x0 + (m.tx - m.x0) * c;
-  const base = m.y0 + (m.ty - m.y0) * c;
-  const y = base - arcHeight(Math.abs(m.tx - m.x0)) * Math.sin(Math.PI * c);
-  return { x, y };
+  return missileOnRoute(m, t, missileRoute(m));
 }
 
 export function spawnMissile(state: SideState, tier: number, targetX: number): Missile {
@@ -33,8 +68,7 @@ export function spawnMissile(state: SideState, tier: number, targetX: number): M
   const x0 = launchPadX(state.side);
   const y0 = WORLD.groundY - 14;
   const ty = WORLD.groundY;
-  const dist = Math.abs(targetX - x0);
-  const flightTime = (dist + 1.9 * arcHeight(dist)) / def.speed;
+  const flightTime = missileRoute({ x0, y0, tx: targetX, ty }).length / def.speed;
   const m: Missile = {
     uid: nextUid(),
     side: state.side,
@@ -42,7 +76,7 @@ export function spawnMissile(state: SideState, tier: number, targetX: number): M
     x: x0,
     y: y0,
     vx: 0,
-    vy: 0,
+    vy: -def.speed,
     x0,
     y0,
     tx: targetX,
@@ -270,11 +304,14 @@ function sweepBuildings(
 }
 
 export function updateMissiles(match: Match, dt: number): void {
+  if (dt <= 0) return;
   for (const m of match.missiles) {
     if (m.dead) continue;
-    const prev = missileAt(m, m.t);
+    const route = missileRoute(m);
+    const previousT = m.t;
+    const prev = missileOnRoute(m, previousT, route);
     m.t += dt / m.flightTime;
-    const now = missileAt(m, Math.min(1, m.t));
+    const now = missileOnRoute(m, Math.min(1, m.t), route);
     m.vx = (now.x - prev.x) / dt;
     m.vy = (now.y - prev.y) / dt;
     m.x = now.x;
@@ -285,10 +322,23 @@ export function updateMissiles(match: Match, dt: number): void {
       match.particles.push(smoke(m.x, m.y, 4 + m.tier));
     }
 
-    // A warhead detonates on whatever it meets first — usually a tower's flank,
-    // not the street behind it.
+    // Split at every route boundary: a long frame must never sweep a diagonal
+    // shortcut from launch/crossing into a building before the marked target.
+    // Rounded-turn chords are safe here because the turns stay above all roofs.
     const defender = m.side === 'player' ? match.enemy : match.player;
-    const struck = sweepBuildings(defender, prev.x, prev.y, now.x, now.y);
+    const { rise, turn, crossing, length } = route;
+    const boundaries = [rise, rise + turn, rise + turn + crossing, rise + turn * 2 + crossing];
+    const checkpoints = boundaries.map((distance) => distance / length)
+      .filter((t) => t > previousT && t < Math.min(1, m.t));
+    checkpoints.push(Math.min(1, m.t));
+    let from = prev;
+    let struck: ReturnType<typeof sweepBuildings> = null;
+    for (const t of checkpoints) {
+      const to = missileOnRoute(m, t, route);
+      struck = sweepBuildings(defender, from.x, from.y, to.x, to.y);
+      if (struck) break;
+      from = to;
+    }
     if (struck) {
       m.dead = true;
       m.x = struck.x;

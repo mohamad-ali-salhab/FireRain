@@ -57,6 +57,55 @@ body {
   pointer-events: auto;
 }
 
+/* Shortcut badges survive dynamic button labels and disappear as one preference. */
+[data-hint]::after {
+  content: attr(data-hint);
+  display: inline-block;
+  margin-left: 7px;
+  padding: 2px 4px;
+  border: 1px solid #8290a4;
+  border-radius: 4px;
+  background: #202b3d;
+  color: #fff;
+  font: 600 10px/1.2 ui-monospace, monospace;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.card[data-hint]::after, .iconbtn[data-hint]::after {
+  position: absolute;
+  bottom: 22px;
+  left: 3px;
+  margin: 0;
+  z-index: 1;
+}
+.iconbtn { position: relative; }
+.iconbtn[data-hint]::after { bottom: -3px; left: auto; right: -2px; }
+.hide-keyboard-hints [data-hint]::after,
+.hide-keyboard-hints .keyboard-guide,
+.hide-keyboard-hints .keyboard-extra { display: none !important; }
+[inert] [data-hint]::after { display: none; }
+button:focus-visible, summary:focus-visible, input:focus-visible {
+  outline: 3px solid #4ec5ff;
+  outline-offset: -3px;
+}
+.dock-utilities { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.dock-utilities .hints-toggle { padding: 5px; font-size: 10px; white-space: nowrap; }
+.keyboard-guide {
+  position: absolute;
+  bottom: calc(var(--dock-h) + 70px + var(--safe-b));
+  left: 12px;
+  max-width: min(720px, calc(100vw - 24px));
+  border-radius: 8px;
+  padding: 6px 10px;
+  color: #dfe6f2;
+  background: rgba(15, 19, 25, .85);
+  font-size: 11px;
+  line-height: 1.7;
+}
+.keyboard-extra { display: block; margin-top: 5px; color: #7de3ff; }
+[data-upgrade-row] { border: 2px solid transparent; border-radius: 12px; padding: 6px; }
+[data-upgrade-row].keyboard-row { border-color: #4ec5ff; }
+
 /* ---------------------------------------------------------------- top bar */
 
 .topbar {

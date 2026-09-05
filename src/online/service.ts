@@ -49,6 +49,8 @@ interface OnlineCallbacks {
 
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const publishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
+const eventPageSize = 500;
+const backlogRetryLimit = 3;
 
 export function initialOnlineState(): OnlineState {
   const configured = Boolean(url && publishableKey);
@@ -72,6 +74,10 @@ export class OnlineService {
   private seenEvents = new Set<string>();
   private eventBacklogReady = false;
   private bufferedEvents: MatchEventRow[] = [];
+  private lastEventId = 0;
+  private matchConnection = 0;
+  private backlogLoad = 0;
+  private backlogRetryTimer = 0;
   private actionTail: Promise<void> = Promise.resolve();
   private profileLoad = 0;
 
@@ -96,7 +102,11 @@ export class OnlineService {
     }
     await this.handleUser(data.session?.user ?? null);
     this.client.auth.onAuthStateChange((_event, session) => {
-      window.setTimeout(() => void this.handleUser(session?.user ?? null), 0);
+      window.setTimeout(() => {
+        // Token refreshes and tab focus can emit another sign-in for the same
+        // account. Reloading its profile would reset an active queue or match.
+        if ((session?.user.id ?? null) !== this.userId) void this.handleUser(session?.user ?? null);
+      }, 0);
     });
   }
 
@@ -115,7 +125,7 @@ export class OnlineService {
     const { data, error } = await this.client.auth.signUp({
       email: email.trim(),
       password,
-      options: { data: { username: cleanName } },
+      options: { data: { username: cleanName }, emailRedirectTo: window.location.origin },
     });
     if (error) {
       this.set({ phase: 'signed-out', message: error.message });
@@ -204,9 +214,9 @@ export class OnlineService {
       p_won: won,
       p_stars: stars,
     });
-    if (error) this.set({ message: `Result will retry next session: ${error.message}` });
-    else await this.loadProfile();
+    if (!error) await this.loadProfile();
     await this.disconnectMatch();
+    if (error) this.set({ message: `Could not save match result online: ${error.message}` });
   }
 
   async syncProgress(meta = this.meta): Promise<void> {
@@ -229,18 +239,26 @@ export class OnlineService {
   }
 
   async disconnectMatch(): Promise<void> {
-    if (this.client && this.channel) await this.client.removeChannel(this.channel);
+    const channel = this.channel;
+    // Invalidate callbacks before waiting for the network unsubscribe.
+    this.matchConnection++;
+    this.backlogLoad++;
+    window.clearTimeout(this.backlogRetryTimer);
+    this.backlogRetryTimer = 0;
     this.channel = null;
     this.activeMatchId = null;
+    this.lastEventId = 0;
     this.seenEvents.clear();
     this.eventBacklogReady = false;
     this.bufferedEvents = [];
     if (this.userId && this.state.phase === 'matched') this.set({ phase: 'ready', message: 'Ready for another match' });
+    if (this.client && channel) await this.client.removeChannel(channel);
   }
 
   private async pollQueue(): Promise<void> {
     if (!this.client || this.state.phase !== 'queueing') return;
     const { data, error } = await this.client.schema('api').rpc('queue_status');
+    if (this.state.phase !== 'queueing') return;
     if (error) {
       window.clearInterval(this.queueTimer);
       this.fail(this.onlineError(error.message));
@@ -255,9 +273,13 @@ export class OnlineService {
       this.fail('The match server returned an invalid ticket');
       return;
     }
+    if (this.activeMatchId === ticket.matchId) return;
+    if (this.channel || this.activeMatchId) await this.disconnectMatch();
+    const connection = ++this.matchConnection;
     window.clearInterval(this.queueTimer);
     this.queueTimer = 0;
     this.activeMatchId = ticket.matchId;
+    this.lastEventId = 0;
     this.seenEvents.clear();
     this.eventBacklogReady = false;
     this.bufferedEvents = [];
@@ -270,30 +292,73 @@ export class OnlineService {
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'match_events', filter: `match_id=eq.${ticket.matchId}` },
-        (payload) => this.queueEvent(payload.new),
+        (payload) => {
+          if (connection === this.matchConnection) this.queueEvent(payload.new);
+        },
       )
       .subscribe((status) => {
+        if (connection !== this.matchConnection) return;
         if (status === 'SUBSCRIBED') void this.loadEventBacklog(ticket.matchId);
-        else if (status === 'CHANNEL_ERROR') this.set({ message: 'Realtime connection interrupted — reconnecting…' });
+        else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          this.eventBacklogReady = false;
+          this.backlogLoad++;
+          window.clearTimeout(this.backlogRetryTimer);
+          this.backlogRetryTimer = 0;
+          this.set({ message: 'Realtime connection interrupted — reconnecting…' });
+        }
       });
   }
 
-  private async loadEventBacklog(matchId: string): Promise<void> {
+  private async loadEventBacklog(matchId: string, retry = 0): Promise<void> {
     if (!this.client || this.activeMatchId !== matchId) return;
-    const { data, error } = await this.client
-      .from('match_events')
-      .select('id, player_id, action')
-      .eq('match_id', matchId)
-      .order('id', { ascending: true });
-    if (error) {
-      this.set({ message: `Could not catch up match events: ${error.message}` });
+    const load = ++this.backlogLoad;
+    const connection = this.matchConnection;
+    const current = () => this.activeMatchId === matchId && connection === this.matchConnection && load === this.backlogLoad;
+    window.clearTimeout(this.backlogRetryTimer);
+    this.backlogRetryTimer = 0;
+    this.eventBacklogReady = false;
+    let cursor = this.lastEventId;
+    const rows: MatchEventRow[] = [];
+    try {
+      // Continue until an empty page, including projects whose API row limit
+      // is smaller than our requested page size. Resume after consumed events.
+      while (current()) {
+        const { data, error } = await this.client
+          .from('match_events')
+          .select('id, player_id, action')
+          .eq('match_id', matchId)
+          .gt('id', cursor)
+          .order('id', { ascending: true })
+          .limit(eventPageSize);
+        if (!current()) return;
+        if (error) throw new Error(error.message);
+        if (!data?.length) break;
+        rows.push(...data);
+        cursor = Number(data[data.length - 1].id);
+      }
+    } catch (error) {
+      if (!current()) return;
+      const message = error instanceof Error ? error.message : 'Network request failed';
+      if (retry < backlogRetryLimit) {
+        this.set({ message: `Catching up match events — retrying: ${message}` });
+        this.backlogRetryTimer = window.setTimeout(() => {
+          if (current()) void this.loadEventBacklog(matchId, retry + 1);
+        }, 1000 * 2 ** retry);
+      } else {
+        this.set({ message: `Match sync failed: ${message}. Return to the menu and reconnect.` });
+      }
       return;
     }
-    const ordered = [...(data ?? []), ...this.bufferedEvents]
+    if (!current()) return;
+    const ordered = [...rows, ...this.bufferedEvents]
       .sort((a, b) => Number(a.id) - Number(b.id));
     this.bufferedEvents = [];
     this.eventBacklogReady = true;
-    for (const row of ordered) this.consumeEvent(row);
+    for (const row of ordered) {
+      if (!current()) return;
+      this.consumeEvent(row);
+    }
+    if (current()) this.set({ message: 'Match connected' });
   }
 
   private queueEvent(raw: unknown): void {
@@ -309,6 +374,7 @@ export class OnlineService {
   private consumeEvent(raw: unknown): void {
     if (!raw || typeof raw !== 'object') return;
     const row = raw as MatchEventRow;
+    this.lastEventId = Math.max(this.lastEventId, Number(row.id) || 0);
     const id = String(row.id);
     if (this.seenEvents.has(id)) return;
     this.seenEvents.add(id);
@@ -319,6 +385,12 @@ export class OnlineService {
 
   private async handleUser(user: User | null): Promise<void> {
     const token = ++this.profileLoad;
+    if (this.userId !== (user?.id ?? null)) {
+      window.clearInterval(this.queueTimer);
+      this.queueTimer = 0;
+      await this.disconnectMatch();
+      if (token !== this.profileLoad) return;
+    }
     if (!user) {
       this.userId = null;
       this.set({ phase: 'signed-out', username: null, wins: 0, losses: 0, stars: 0, message: 'Sign in or make an account to play online' });

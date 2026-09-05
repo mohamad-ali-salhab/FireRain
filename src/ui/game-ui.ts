@@ -92,6 +92,17 @@ export interface UiHost {
 
 type CardUpdate = () => void;
 
+export const PANEL_KEYS: Partial<Record<PanelId, string>> = {
+  buildings: 'b', antiair: 'a', abm: 'r', icbm: 'i', upgrades: 'u',
+};
+
+function shortcut(node: HTMLElement, key: string, label = key.toUpperCase()): void {
+  node.dataset.key = key;
+  node.dataset.hint = label;
+  node.setAttribute('aria-keyshortcuts', key === 'esc' ? 'Escape' : key);
+    if (node.title) node.setAttribute('aria-label', node.title);
+}
+
 const money = (n: number): string => {
   const r = Math.round(n * 10) / 10;
   return Number.isInteger(r) ? String(r) : r.toFixed(1);
@@ -139,10 +150,78 @@ export class GameUI {
   private builtPanel: PanelId | null = null;
   private overlayKind: 'none' | 'menu' | 'shop' | 'pause' | 'result' | 'upgrades' = 'none';
   private toastTimer = 0;
+  private showKeyboardHints = true;
+  private upgradeRow = 2;
+  private keyboardGuide!: HTMLElement;
+
+  toggleKeyboardHints(): void {
+    this.showKeyboardHints = !this.showKeyboardHints;
+    this.root.classList.toggle('hide-keyboard-hints', !this.showKeyboardHints);
+    try { localStorage.setItem('final-skyline:keyboard-hints', String(this.showKeyboardHints)); } catch { /* optional preference */ }
+    this.root.querySelectorAll<HTMLButtonElement>('.hints-toggle').forEach((button) => {
+      button.textContent = `Key hints: ${this.showKeyboardHints ? 'on' : 'off'}`;
+      button.setAttribute('aria-pressed', String(this.showKeyboardHints));
+    });
+  }
+
+  private hintsToggle(): HTMLButtonElement {
+    const button = el('button', 'btn ghost hints-toggle', `Key hints: ${this.showKeyboardHints ? 'on' : 'off'}`);
+    shortcut(button, 'h');
+    button.setAttribute('aria-pressed', String(this.showKeyboardHints));
+    button.addEventListener('click', () => this.toggleKeyboardHints());
+    return button;
+  }
+
+  /** Activate the same buttons used by pointer input, scoped to the visible overlay. */
+  handleKey(event: KeyboardEvent): boolean {
+    this.sync();
+    const key = event.key.toLowerCase();
+    if (key === 'h') {
+      this.toggleKeyboardHints();
+      return true;
+    }
+    const overlayOpen = this.overlayKind !== 'none';
+    const scope = overlayOpen ? this.overlay : this.root;
+    if (key === 'tab' && overlayOpen) {
+      const items = Array.from(scope.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), summary'))
+        .filter((node) => node.getClientRects().length > 0);
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (first && (!scope.contains(document.activeElement) || (event.shiftKey ? document.activeElement === first : document.activeElement === last))) {
+        (event.shiftKey ? last : first).focus();
+        return true;
+      }
+    }
+    // Enter/Space retain native activation for a focused button or summary.
+    if ((key === 'enter' || key === ' ') && document.activeElement?.matches('button, summary')) return false;
+    if (this.overlayKind === 'upgrades') {
+      const row = ['r', 'd', 'm'].indexOf(key);
+      if (row >= 0) {
+        this.upgradeRow = row;
+        this.highlightUpgradeRow();
+        return true;
+      }
+    }
+    const buttons = Array.from(scope.querySelectorAll<HTMLButtonElement>('button[data-key]'));
+    const button = buttons.find((node) => node.dataset.key === key && !node.disabled && node.getClientRects().length > 0 &&
+      (this.overlayKind !== 'upgrades' || !node.closest('[data-upgrade-row]') || node.closest<HTMLElement>('[data-upgrade-row]')?.dataset.upgradeRow === String(this.upgradeRow)));
+    if (!button) return false;
+    button.click();
+    button.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    return true;
+  }
+
+  private highlightUpgradeRow(): void {
+    this.overlay.querySelectorAll<HTMLElement>('[data-upgrade-row]').forEach((row) => {
+      row.classList.toggle('keyboard-row', Number(row.dataset.upgradeRow) === this.upgradeRow);
+    });
+  }
 
   constructor(root: HTMLElement, host: UiHost) {
     this.root = root;
     this.host = host;
+    try { this.showKeyboardHints = localStorage.getItem('final-skyline:keyboard-hints') !== 'false'; } catch { /* optional preference */ }
+    this.root.classList.toggle('hide-keyboard-hints', !this.showKeyboardHints);
     this.buildChrome();
   }
 
@@ -155,6 +234,7 @@ export class GameUI {
     this.topbar = el('div', 'topbar');
     const pause = el('button', 'iconbtn', ICON_PAUSE);
     pause.title = 'Pause';
+    shortcut(pause, 'p');
     pause.addEventListener('click', () => {
       if (this.host.match?.mode === 'online') {
         audio.deny();
@@ -178,6 +258,7 @@ export class GameUI {
 
     const zoom = el('button', 'iconbtn', ICON_ZOOM);
     zoom.title = 'Toggle battlefield view';
+    shortcut(zoom, 'v');
     zoom.addEventListener('click', () => {
       audio.click();
       this.host.toggleZoom();
@@ -185,6 +266,7 @@ export class GameUI {
 
     this.ringsBtn = el('button', 'iconbtn', ICON_RADIUS);
     this.ringsBtn.title = 'Show defence radius';
+    shortcut(this.ringsBtn, 'g');
     this.ringsBtn.addEventListener('click', () => {
       audio.click();
       this.host.ui.showRings = !this.host.ui.showRings;
@@ -210,7 +292,8 @@ export class GameUI {
     this.dockScroll = el('div', 'dock-scroll');
     this.dockBack = el('div', 'dock-back');
     const sound = el('button', 'iconbtn');
-    sound.style.marginBottom = '22px';
+    sound.title = 'Toggle sound';
+    shortcut(sound, 'm');
     sound.addEventListener('click', () => {
       const next = !audio.muted;
       audio.setMuted(next);
@@ -218,10 +301,13 @@ export class GameUI {
       sound.innerHTML = next ? ICON_SOUND_OFF : ICON_SOUND_ON;
     });
     sound.innerHTML = audio.muted ? ICON_SOUND_OFF : ICON_SOUND_ON;
-    this.dock.append(sound, this.dockBack, this.dockScroll);
+    const utilities = el('div', 'dock-utilities');
+    utilities.append(sound, this.hintsToggle());
+    this.dock.append(utilities, this.dockBack, this.dockScroll);
     this.root.appendChild(this.dock);
 
     this.fightBtn = el('button', 'fightbtn', 'Fight');
+    shortcut(this.fightBtn, 'f', 'F / Space');
     this.fightBtn.style.display = 'none';
     this.fightBtn.addEventListener('click', () => this.onFight());
     this.root.appendChild(this.fightBtn);
@@ -229,6 +315,9 @@ export class GameUI {
     this.hintEl = el('div', 'hint');
     this.hintEl.style.display = 'none';
     this.root.appendChild(this.hintEl);
+
+    this.keyboardGuide = el('div', 'keyboard-guide');
+    this.root.appendChild(this.keyboardGuide);
 
     this.toastEl = el('div', 'toast');
     this.root.appendChild(this.toastEl);
@@ -259,6 +348,14 @@ export class GameUI {
     this.topbar.style.display = inGame ? '' : 'none';
     this.statusbar.style.display = inGame ? '' : 'none';
     this.dock.style.display = inGame ? '' : 'none';
+    this.keyboardGuide.style.display = inGame ? '' : 'none';
+    this.keyboardGuide.textContent = 'B Build · A Anti-Air · R Ammo · U Upgrades · I Missiles · T Aim · F/Space Fight · H Hints';
+    if (ui.placing || ui.panel === 'icbm') {
+      this.keyboardGuide.textContent += ' · ←/→ Move · ↑/↓ Jump · Shift Fine · Enter Place/Pin · Esc Cancel';
+    } else {
+      this.keyboardGuide.textContent += ' · Arrows Pan · +/− Zoom · Tab Select · Enter Activate';
+    }
+    this.ringsBtn.classList.toggle('on', ui.showRings);
 
     if (inGame && match) {
       this.syncTop(match);
@@ -272,6 +369,11 @@ export class GameUI {
     }
 
     this.syncOverlay(inGame ? match : null, meta);
+    const modal = this.overlayKind !== 'none';
+    this.dock.inert = modal;
+    this.topbar.inert = modal;
+    this.fightBtn.inert = modal;
+    this.keyboardGuide.hidden = modal;
   }
 
   private syncTop(match: Match): void {
@@ -356,6 +458,7 @@ export class GameUI {
       } else {
         this.hintEl.innerHTML = `<b>${queued}</b> pinned · <b>${pending}</b> in the tube — press <b>Fight</b> to launch.`;
       }
+      this.hintEl.innerHTML += '<span class="keyboard-extra">T aim · Enter pin · Z undo · C clear pins</span>';
     } else if (ui.panel === 'none' && match.player.buildings.length === 0) {
       this.hintEl.style.display = '';
       this.hintEl.innerHTML = `Open <b>Buildings</b> and put up your first block — every building pays out every 2 seconds.`;
@@ -408,6 +511,16 @@ export class GameUI {
         break;
     }
     this.dockScroll.scrollLeft = 0;
+    if (ui.panel === 'none') {
+      this.dockScroll.querySelectorAll<HTMLElement>('.card').forEach((card, index) => {
+        shortcut(card, ['u', 'b', 'a', 'r', 'i'][index]);
+      });
+    } else {
+      let index = 0;
+      this.dockScroll.querySelectorAll<HTMLElement>('.card').forEach((card) => {
+        if (!card.dataset.key) shortcut(card, String(++index));
+      });
+    }
   }
 
   private card(opts: {
@@ -461,6 +574,7 @@ export class GameUI {
     const b = el('button', 'card');
     b.innerHTML = `<div class="art">${ICON_BACK}</div>`;
     b.title = 'Back';
+    shortcut(b, 'escape', 'Esc');
     b.addEventListener('click', () => {
       audio.click();
       this.host.setPanel('none');
@@ -595,6 +709,7 @@ export class GameUI {
     const mult = el('button', 'card');
     mult.innerHTML = `<div class="art" style="font-size:26px;font-weight:900;color:#1b2028">x${this.host.ui.ammoMult}</div>`;
     mult.title = 'Rounds bought per tap';
+    shortcut(mult, 'x');
     mult.addEventListener('click', () => {
       audio.click();
       const order: (1 | 5 | 10)[] = [1, 5, 10];
@@ -643,6 +758,8 @@ export class GameUI {
 
   private buildIcbmPanel(): void {
     const undo = el('button', 'card');
+    undo.title = 'Clear all pinned targets';
+    shortcut(undo, 'c');
     undo.innerHTML = `<div class="art" style="font-size:12px;font-weight:900;color:#1b2028;text-align:center;line-height:1.2">CLEAR<br>PINS</div>`;
     undo.addEventListener('click', () => {
       const match = this.host.match;
@@ -726,6 +843,11 @@ export class GameUI {
       else if (want === 'pause') this.buildPause();
       else if (want === 'result' && match) this.buildResult(match, meta);
       else if (want === 'upgrades' && match) this.buildUpgrades(match);
+      // All other controls remain reachable using native Tab + Enter navigation.
+      this.overlay.querySelectorAll<HTMLElement>('button, summary').forEach((node) => {
+        if (!node.dataset.hint) node.dataset.hint = 'Tab ↵';
+      });
+      if (want !== 'none' && document.activeElement instanceof HTMLElement && !this.overlay.contains(document.activeElement)) document.activeElement.blur();
     }
     if (want === 'upgrades') for (const u of this.upgradeUpdates) u();
   }
@@ -749,9 +871,10 @@ export class GameUI {
     );
 
     const grid = el('div', 'diffgrid');
-    (Object.keys(BOTS) as Difficulty[]).forEach((d) => {
+    (Object.keys(BOTS) as Difficulty[]).forEach((d, index) => {
       const b = el('button', `diff${ui.difficulty === d ? ' sel' : ''}`);
       b.innerHTML = `<div class="t">${BOTS[d].label}</div><div class="d">${BOTS[d].blurb}</div>`;
+      shortcut(b, String(index + 1));
       b.addEventListener('click', () => {
         audio.click();
         ui.difficulty = d;
@@ -772,6 +895,7 @@ export class GameUI {
     ];
     for (const len of lengths) {
       const b = el('button', 'btn ghost', len.label);
+      shortcut(b, String(lengths.indexOf(len) + 5));
       if (ui.duration === len.value) b.style.borderColor = 'var(--gold)';
       b.addEventListener('click', () => {
         audio.click();
@@ -795,17 +919,19 @@ export class GameUI {
     const actions = el('div', 'row center');
     actions.style.marginTop = '10px';
     const play = el('button', 'btn primary', 'Play');
+    shortcut(play, 'enter', 'Enter');
     play.addEventListener('click', () => {
       audio.init();
       audio.click();
       this.host.startMatch();
     });
     const shop = el('button', 'btn', 'Star Shop');
+    shortcut(shop, 's');
     shop.addEventListener('click', () => {
       audio.click();
       this.host.openShop();
     });
-    actions.append(play, shop);
+    actions.append(play, shop, this.hintsToggle());
     wrap.appendChild(actions);
 
     wrap.appendChild(this.buildOnlineCard());
@@ -828,6 +954,7 @@ export class GameUI {
         <li><b>Upgrades</b> (in-match, paid in cash) widen defence radius, cut anti-air reload, and unlock heavier missiles.</li>
         <li><b>Attacking</b>: open ICBM, pick a tier, tap their city to pin targets, then hit Fight. Each tier launches on its own reload timer.</li>
         <li><b>Stars</b> earned from matches buy permanent radius and reload upgrades in the Star Shop.</li>
+        <li><b>Keyboard</b>: B buildings, A anti-air, R ammunition, U upgrades, I missiles. Number keys select an item. T moves to targeting; arrows move the cursor (up/down make larger jumps, Shift moves precisely). Enter places or pins, F/Space fights, Z undoes a pin, C clears pins, X cycles ammo quantities. P pauses, V changes view, G shows coverage, M mutes, H hides keyboard hints. Tab and Enter operate menus and the Star Shop. In Upgrades, choose R (radius), D (defence reload), or M (missiles), then a number.</li>
       </ul>`;
     wrap.appendChild(help);
 
@@ -928,6 +1055,7 @@ export class GameUI {
     const head = el('div');
     head.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;';
     const back = el('button', 'btn ghost', '← Back');
+    shortcut(back, 'escape', 'Esc');
     back.addEventListener('click', () => {
       audio.click();
       this.host.closeShop();
@@ -1056,11 +1184,13 @@ export class GameUI {
     const row = el('div');
     row.style.cssText = 'display:flex;flex-direction:column;gap:10px;margin-top:10px;';
     const resume = el('button', 'btn primary', 'Resume');
+    shortcut(resume, 'p');
     resume.addEventListener('click', () => {
       audio.click();
       this.host.setPaused(false);
     });
     const soundBtn = el('button', 'btn ghost', audio.muted ? 'Sound: off' : 'Sound: on');
+    shortcut(soundBtn, 'm');
     soundBtn.addEventListener('click', () => {
       const next = !audio.muted;
       audio.setMuted(next);
@@ -1068,11 +1198,12 @@ export class GameUI {
       soundBtn.textContent = next ? 'Sound: off' : 'Sound: on';
     });
     const quit = el('button', 'btn ghost', 'Quit to menu');
+    shortcut(quit, 'q');
     quit.addEventListener('click', () => {
       audio.click();
       this.host.quitToMenu();
     });
-    row.append(resume, soundBtn, quit);
+    row.append(resume, soundBtn, this.hintsToggle(), quit);
     wrap.appendChild(row);
     this.overlay.appendChild(wrap);
   }
@@ -1106,6 +1237,7 @@ export class GameUI {
 
     const row = el('div', 'row center');
     const again = el('button', 'btn primary', match.mode === 'online' ? 'Back to online' : 'Play again');
+    shortcut(again, 'enter', 'Enter');
     again.addEventListener('click', () => {
       audio.click();
       if (match.mode === 'online') this.host.quitToMenu();
@@ -1117,11 +1249,13 @@ export class GameUI {
       this.host.openShop();
     });
     const menu = el('button', 'btn ghost', 'Main menu');
+    shortcut(menu, 'q');
     menu.addEventListener('click', () => {
       audio.click();
       this.host.quitToMenu();
     });
     row.append(again, shop, menu);
+    shortcut(shop, 's');
     wrap.appendChild(row);
     this.overlay.appendChild(wrap);
   }
@@ -1134,6 +1268,7 @@ export class GameUI {
     const head = el('div');
     head.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:10px;';
     const back = el('button', 'btn ghost', '← Back');
+    shortcut(back, 'escape', 'Esc');
     back.addEventListener('click', () => {
       audio.click();
       this.host.setPanel('none');
@@ -1146,10 +1281,18 @@ export class GameUI {
       (cash.querySelector('.cash') as HTMLElement).textContent = money(match.player.money);
     });
 
+    let rowIndex = 0;
     const mkRow = (title: string, cards: HTMLElement[]) => {
-      wrap.appendChild(el('h2', undefined, title));
+      const rowKey = ['R', 'D', 'M'][rowIndex];
+      const heading = el('h2', undefined, title);
+      heading.dataset.hint = rowKey;
+      wrap.appendChild(heading);
       const row = el('div', 'row center');
-      cards.forEach((c) => row.appendChild(c));
+      row.dataset.upgradeRow = String(rowIndex++);
+      cards.forEach((c, index) => {
+        shortcut(c, String(index + 1), `${rowKey} → ${index + 1}`);
+        row.appendChild(c);
+      });
       wrap.appendChild(row);
     };
 
@@ -1285,6 +1428,7 @@ export class GameUI {
     wrap.appendChild(note);
 
     this.overlay.appendChild(wrap);
+    this.highlightUpgradeRow();
   }
 }
 
